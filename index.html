@@ -1,0 +1,1082 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>智慧語音掛號助理（RAG版）</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const STATES = {
+      INIT: "INIT",
+      SELECT_BODY_PART: "SELECT_BODY_PART",
+      QA: "QA",
+      ALERT: "ALERT",
+      RESULT: "RESULT",
+      PATIENT_INFO: "PATIENT_INFO",
+      BOOKING: "BOOKING",
+      COMPLETE: "COMPLETE",
+      CHECK_HISTORY: "CHECK_HISTORY" 
+    };
+
+    const doctorsByDept = {
+      心臟內科: ["王醫師", "林醫師"],
+      胸腔內科: ["陳醫師", "張醫師"],
+      神經內科: ["李醫師", "黃醫師"],
+      家醫科: ["吳醫師", "許醫師"],
+      腸胃科: ["周醫師", "蔡醫師"],
+      一般外科: ["郭醫師", "徐醫師"],
+      耳鼻喉科: ["鄭醫師", "彭醫師"],
+      皮膚科: ["何醫師", "蘇醫師"],
+      骨科: ["高醫師", "曾醫師"],
+      復健科: ["賴醫師", "葉醫師"],
+      婦產科: ["謝醫師", "鍾醫師"],
+      眼科: ["杜醫師", "簡醫師"]
+    };
+
+    const timeSlots = ["早上 09:00 - 12:00", "下午 03:00 - 05:00", "晚上 06:00 - 09:00"];
+
+    const doctorSchedules = {
+      "王醫師": ["早上 09:00 - 12:00", "下午 03:00 - 05:00"],
+      "林醫師": ["下午 03:00 - 05:00", "晚上 06:00 - 09:00"],
+      "陳醫師": ["早上 09:00 - 12:00"],
+      "張醫師": ["晚上 06:00 - 09:00"],
+      "吳醫師": ["早上 09:00 - 12:00", "晚上 06:00 - 09:00"],
+      "謝醫師": ["下午 03:00 - 05:00", "晚上 06:00 - 09:00"],
+      "杜醫師": ["早上 09:00 - 12:00"]
+    };
+
+    const symptomDB = {
+      頭: { questions: [{ key: "pain", q: "請問是刺痛、悶痛、脹痛，還是劇烈頭痛？" }, { key: "duration", q: "已經持續多久了？" }, { key: "vision", q: "有沒有頭暈、噁心，或視線模糊？" }] },
+      胸: { questions: [{ key: "pain", q: "請問是刺痛、悶痛，還是壓迫感？" }, { key: "breath", q: "是否會喘、胸悶，或呼吸不順？" }, { key: "duration", q: "症狀是突然發生還是持續一段時間了？" }] },
+      腹部: { questions: [{ key: "pain", q: "請問是絞痛、悶痛、脹氣，還是刺痛？" }, { key: "eat", q: "吃東西後會更痛，還是空腹時更明顯？" }, { key: "digest", q: "有沒有噁心、嘔吐、腹瀉，或便秘？" }] },
+      喉嚨: { questions: [{ key: "fever", q: "有沒有發燒或吞嚥疼痛？" }, { key: "cough", q: "有沒有咳嗽、流鼻水，或聲音沙啞？" }, { key: "duration", q: "這些症狀持續幾天了？" }] },
+      皮膚: { questions: [{ key: "rash", q: "是紅疹、搔癢、脫皮，還是起水泡？" }, { key: "spread", q: "範圍有沒有擴大？" }, { key: "allergy", q: "最近有沒有接觸新保養品、藥物，或食物？" }] },
+      關節: { questions: [{ key: "injury", q: "是扭傷、撞傷，還是長期痠痛？" }, { key: "move", q: "活動時會更痛，還是休息時也會痛？" }, { key: "swelling", q: "有沒有腫脹、瘀青，或無法出力？" }] },
+      婦科: { questions: [{ key: "cycle", q: "和月經有關嗎？例如經痛、週期不規律或出血異常？" }, { key: "pain", q: "下腹部疼痛是悶痛、抽痛，還是持續痛？" }, { key: "discharge", q: "有沒有分泌物異常或其他不舒服？" }] },
+      眼睛: { questions: [{ key: "symptom", q: "是乾澀、疼痛、紅眼，還是視線模糊？" }, { key: "light", q: "看光會刺眼嗎？" }, { key: "duration", q: "症狀從什麼時候開始的？" }] },
+      未明: { questions: [{ key: "general", q: "請描述最主要的不舒服，例如頭暈、發燒、想吐或全身無力。" }, { key: "duration", q: "這個情況持續多久了？" }, { key: "severity", q: "症狀有越來越嚴重，或已影響日常活動嗎？" }] }
+    };
+
+    function normalizeSpeechText(s) {
+      if (!s) return "";
+      return s.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xff10 + 48))
+              .replace(/[，、；]/g, " ")
+              .replace(/\s+/g, " ")
+              .trim();
+    }
+
+    async function callLobsterBackend(userText, currentState, history) {
+      const gasUrl = "https://script.google.com/macros/s/AKfycbyim9_kVincHBae-Xf7In47jZwMyZmoChXH0EqMs6qnaVO-p6cRPjnp7Q18mYoeQk6qPg/exec";
+      try {
+        const res = await fetch(gasUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ message: userText, state: currentState, history: history })
+        });
+        const data = await res.json();
+        return data;
+      } catch (e) {
+        console.error("後端連線失敗", e);
+        return null;
+      }
+    }
+
+    function parsePatientInfoFromSpeech(raw) {
+      const t = normalizeSpeechText(raw);
+      const out = { name: "", idNumber: "", birth: "", phone: "" };
+      if (!t) return out;
+
+      const compact = t.replace(/[\s，、；,\.\-\/]/g, "");
+      const idM = compact.match(/([A-Za-z][12]\d{8})/i);
+      if (idM) out.idNumber = idM[1].toUpperCase();
+
+      const phM = compact.match(/09\d{8}/);
+      if (phM) out.phone = phM[0];
+
+      const roc = t.match(/民國\s*(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
+      if (roc) {
+        const y = parseInt(roc[1], 10) + 1911;
+        out.birth = `${y}/${String(roc[2]).padStart(2, "0")}/${String(roc[3]).padStart(2, "0")}`;
+      } else {
+        const west = t.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/) || t.match(/(\d{4})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})/);
+        if (west) {
+          out.birth = `${west[1]}/${String(west[2]).padStart(2, "0")}/${String(west[3]).padStart(2, "0")}`;
+        }
+      }
+
+      let nm = t.match(/(?:姓名|名字)[:：\s]*([\u4e00-\u9fff·．]{2,8})(?=\s|$|身分|電話|手機|出生|生日|病歷|[A-Za-z]|09|\d{4}|年)/) || 
+               t.match(/我(?:叫|是|姓名是)[:：\s]*([\u4e00-\u9fff·．]{2,8})/);
+      if (nm) out.name = nm[1].replace(/[·．]/g, "").trim();
+
+      return out;
+    }
+
+    function App() {
+      const [state, setState] = useState(STATES.INIT);
+      const [prompt, setPrompt] = useState("請說：我要掛號，或直接說出不舒服的部位");
+      const [text, setText] = useState("");
+      const [inputValue, setInputValue] = useState("");
+      const [recording, setRecording] = useState(false);
+      const [lastInputEcho, setLastInputEcho] = useState("");
+      const [bodyPart, setBodyPart] = useState("");
+      const [qaStep, setQaStep] = useState(0);
+      const [answers, setAnswers] = useState({});
+      const [result, setResult] = useState([]);
+      const [alertMessage, setAlertMessage] = useState("");
+      const [chatHistory, setChatHistory] = useState([]);
+
+      const [isDirectBooking, setIsDirectBooking] = useState(false);
+
+      const [patientInfo, setPatientInfo] = useState({ name: "", idNumber: "", birth: "", phone: "" });
+
+      const [booking, setBooking] = useState({
+        department: "家醫科",
+        doctor: "吳醫師",
+        date: new Date().toISOString().split('T')[0],
+        slot: timeSlots[0] 
+      });
+
+      const [recordingPatientInfo, setRecordingPatientInfo] = useState(false);
+      const [patientVoiceNeedsReview, setPatientVoiceNeedsReview] = useState(false);
+      const [lastPatientVoiceTranscript, setLastPatientVoiceTranscript] = useState("");
+      const [ragLoading, setRagLoading] = useState(false);
+      const [ragError, setRagError] = useState("");
+      const [ragAnswer, setRagAnswer] = useState("");
+      const [ragChunks, setRagChunks] = useState([]);
+
+      const [searchId, setSearchId] = useState("");
+      const [historyList, setHistoryList] = useState(null);
+      const [isSearching, setIsSearching] = useState(false);
+
+      const recognitionRef = useRef(null);
+      const patientInfoRecognitionRef = useRef(null);
+      const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {}, chatHistory: [] });
+
+      useEffect(() => {
+        latestRef.current = { state, bodyPart, qaStep, answers, chatHistory };
+      }, [state, bodyPart, qaStep, answers, chatHistory]);
+
+      useEffect(() => {
+        if (state === STATES.RESULT && result.length > 0) {
+          const topDept = Array.isArray(result[0]) ? result[0][0] : result[0];
+          const topDoc = doctorsByDept[topDept] ? doctorsByDept[topDept][0] : "";
+          const availableSlots = doctorSchedules[topDoc] || timeSlots;
+          setBooking({
+            department: topDept,
+            doctor: topDoc,
+            date: new Date().toISOString().split('T')[0],
+            slot: availableSlots[0] 
+          });
+        }
+      }, [state, result]);
+
+      function speak(message) {
+        if (!window.speechSynthesis) return;
+        const utterance = new SpeechSynthesisUtterance(message);
+        utterance.lang = "zh-TW";
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utterance);
+      }
+
+      function startRecord() {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) return alert("瀏覽器不支援");
+        const rec = new SR();
+        rec.lang = "zh-TW";
+        rec.onresult = (e) => { setText(e.results[0][0].transcript); setLastInputEcho(e.results[0][0].transcript); };
+        rec.onend = () => setRecording(false);
+        rec.start();
+        setRecording(true);
+      }
+
+      function stopRecord() { setRecording(false); }
+
+      function handleBookingChange(e) {
+        const { name, value } = e.target;
+        setBooking((prev) => {
+          const updated = { ...prev, [name]: value };
+          
+          let targetDoctor = updated.doctor;
+
+          if (name === "department") {
+            targetDoctor = doctorsByDept[value] ? doctorsByDept[value][0] : "";
+            updated.doctor = targetDoctor;
+          }
+
+          if (name === "department" || name === "doctor") {
+            const availableSlots = doctorSchedules[targetDoctor] || timeSlots;
+            if (!availableSlots.includes(updated.slot)) {
+              updated.slot = availableSlots[0]; 
+            }
+          }
+          
+          return updated;
+        });
+      }
+
+      function startPatientInfoRecord() {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) { alert("此瀏覽器不支援語音辨識，請改用文字輸入。"); return; }
+        const rec = new SR();
+        rec.lang = "zh-TW";
+        rec.interimResults = false;
+        rec.maxAlternatives = 1;
+        rec.onresult = (e) => {
+          const transcript = e.results[0][0].transcript;
+          setLastPatientVoiceTranscript(transcript);
+          const parsed = parsePatientInfoFromSpeech(transcript);
+          setPatientInfo((prev) => ({
+            ...prev,
+            ...(parsed.name ? { name: parsed.name } : {}),
+            ...(parsed.idNumber ? { idNumber: parsed.idNumber } : {}),
+            ...(parsed.birth ? { birth: parsed.birth } : {}),
+            ...(parsed.phone ? { phone: parsed.phone } : {})
+          }));
+          setPatientVoiceNeedsReview(true);
+          speak("已辨識您的語音內容，請核對欄位是否正確，再按下確認辨識結果。");
+        };
+        rec.onend = () => { setRecordingPatientInfo(false); };
+        rec.onerror = (e) => {
+          setRecordingPatientInfo(false);
+          speak("語音辨識發生錯誤");
+        };
+        rec.start();
+        patientInfoRecognitionRef.current = rec;
+        setRecordingPatientInfo(true);
+      }
+
+      function stopPatientInfoRecord() {
+        patientInfoRecognitionRef.current?.stop();
+        setRecordingPatientInfo(false);
+      }
+
+      function confirmPatientVoiceReview() {
+        setPatientVoiceNeedsReview(false);
+        speak("已確認基本資料，可繼續下一步。");
+      }
+
+      function submitManualInput() {
+        const trimmed = inputValue.trim();
+        if (!trimmed) return;
+        setLastInputEcho(trimmed);
+        setText(trimmed);
+        setInputValue("");
+      }
+
+      function submitQuickOption(value) {
+        const v = (value || "").trim();
+        if (!v) return;
+        setLastInputEcho(v);
+        setText(v);
+        setInputValue("");
+      }
+
+      function detectPart(content) {
+        if (content.includes("頭") || content.includes("頭痛") || content.includes("暈")) return "頭";
+        if (content.includes("胸") || content.includes("心臟") || content.includes("胸悶") || content.includes("喘")) return "胸";
+        if (content.includes("肚") || content.includes("腹") || content.includes("胃")) return "腹部";
+        if (content.includes("喉") || content.includes("咳") || content.includes("發燒") || content.includes("鼻水")) return "喉嚨";
+        if (content.includes("皮膚") || content.includes("紅疹") || content.includes("癢") || content.includes("水泡")) return "皮膚";
+        if (content.includes("膝") || content.includes("肩") || content.includes("腳") || content.includes("手") || content.includes("關節") || content.includes("扭傷")) return "關節";
+        if (content.includes("月經") || content.includes("經痛") || content.includes("下腹") || content.includes("分泌物")) return "婦科";
+        if (content.includes("眼") || content.includes("視線") || content.includes("模糊") || content.includes("紅眼")) return "眼睛";
+        return "未明";
+      }
+
+      function extractKeySymptoms(text) {
+        if (!text) return "";
+        const keywords = [
+          "胸悶","胸痛","呼吸困難","喘","頭痛","頭暈","暈","肚子痛","腹痛","腹瀉","噁心",
+          "咳嗽","發燒","喉嚨痛","紅疹","過敏","癢","水泡","關節痛","扭傷","經痛","分泌物","眼睛痛","視線模糊"
+        ];
+        const ignore = ["沒有","不會","還好","一天","兩天","三天"];
+        const words = text.split(/[\s；，,。]/);
+        const result = words.filter(w => keywords.some(k => w.includes(k)) && !ignore.includes(w));
+        return result.join(" ");
+      }
+
+      function hasDirectSymptomHint(content) {
+        const t = (content || "").trim();
+        if (!t) return false;
+        const normalized = t.replace(/\s/g, "").replace(/[。．.，,、]/g, "");
+        if (/^(我要)?掛號$/.test(normalized)) return false;
+        if (t.includes("頭") || t.includes("頭痛") || t.includes("暈")) return true;
+        if (t.includes("胸") || t.includes("心臟") || t.includes("胸悶") || t.includes("喘")) return true;
+        if (t.includes("肚") || t.includes("腹") || t.includes("胃")) return true;
+        if (t.includes("喉") || t.includes("咳") || t.includes("發燒") || t.includes("鼻水")) return true;
+        if (t.includes("皮膚") || t.includes("紅疹") || t.includes("癢") || t.includes("水泡")) return true;
+        if (t.includes("膝") || t.includes("肩") || t.includes("腳") || t.includes("手") || t.includes("關節") || t.includes("扭傷")) return true;
+        if (t.includes("月經") || t.includes("經痛") || t.includes("下腹") || t.includes("分泌物")) return true;
+        if (t.includes("眼") || t.includes("視線") || t.includes("模糊") || t.includes("紅眼")) return true;
+        return /(不舒服|難受|好痛|很痛|刺痛|悶痛|脹痛|酸痛|麻|噁心|嘔吐|腹瀉|拉肚子|發燒|咳嗽|流鼻水|過敏|紅腫|無力|疲倦|抽筋|水腫)/.test(t);
+      }
+
+      function checkEmergency(part, ans) {
+        const joined = Object.values(ans).join(" ");
+        if (part === "胸" && /(喘不過氣|呼吸困難|壓迫感很重|胸痛很嚴重)/.test(joined)) return "偵測到胸痛合併呼吸異常，建議立即前往急診或撥打 119。";
+        if (part === "頭" && /(劇烈頭痛|意識不清|看不清楚|一直嘔吐)/.test(joined)) return "偵測到劇烈頭部症狀，建議立即前往急診評估。";
+        if ((part === "腹部" || part === "婦科") && /(大量出血|痛到受不了|昏倒)/.test(joined)) return "偵測到可能的急性腹部或大量出血風險，建議立即就醫或前往急診。";
+        if (/(高燒不退|抽搐)/.test(joined)) return "偵測到較危急症狀，建議盡快就醫，必要時前往急診。";
+        return "";
+      }
+
+      function calculate(part, ans) {
+        const score = { 心臟內科: 40, 胸腔內科: 35, 神經內科: 35, 家醫科: 35, 腸胃科: 35, 一般外科: 30, 耳鼻喉科: 30, 皮膚科: 30, 骨科: 30, 復健科: 25, 婦產科: 30, 眼科: 30 };
+        const joined = Object.values(ans).join(" ");
+        if (part === "胸") {
+          score["心臟內科"] += 20; score["胸腔內科"] += 15;
+          if (/悶|壓迫/.test(joined)) score["心臟內科"] += 20;
+          if (/喘|呼吸不順/.test(joined)) score["胸腔內科"] += 20;
+        }
+        if (part === "頭") {
+          score["神經內科"] += 25;
+          if (/劇烈|視線模糊|頭暈/.test(joined)) score["神經內科"] += 20;
+          score["家醫科"] += 10;
+        }
+        if (part === "腹部") {
+          score["腸胃科"] += 25;
+          if (/吃東西後|空腹/.test(joined)) score["腸胃科"] += 15;
+          if (/刺痛|劇痛/.test(joined)) score["一般外科"] += 10;
+        }
+        if (part === "喉嚨") {
+          score["耳鼻喉科"] += 25; score["家醫科"] += 15;
+          if (/發燒|咳嗽/.test(joined)) score["胸腔內科"] += 10;
+        }
+        if (part === "皮膚") {
+          score["皮膚科"] += 30;
+          if (/過敏|藥物|食物/.test(joined)) score["家醫科"] += 10;
+        }
+        if (part === "關節") {
+          score["骨科"] += 25; score["復健科"] += 18;
+          if (/扭傷|撞傷|腫脹|瘀青/.test(joined)) score["骨科"] += 15;
+        }
+        if (part === "婦科") {
+          score["婦產科"] += 35; score["家醫科"] += 10;
+        }
+        if (part === "眼睛") { score["眼科"] += 35; }
+        if (part === "未明") {
+          score["家醫科"] += 30;
+          if (/發燒|咳嗽|鼻水/.test(joined)) score["耳鼻喉科"] += 15;
+          if (/想吐|腹瀉|肚子痛/.test(joined)) score["腸胃科"] += 15;
+          if (/頭暈|頭痛/.test(joined)) score["神經內科"] += 15;
+          if (/胸悶|喘/.test(joined)) score["胸腔內科"] += 15;
+        }
+        return Object.entries(score).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      }
+
+      async function callRAG(question, metadata = {}) {
+        setRagLoading(true); setRagError(""); setRagAnswer(""); setRagChunks([]);
+        try {
+          const res = await fetch("http://127.0.0.1:8000/rag/answer", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question, top_k: 3, metadata })
+          });
+          const data = await res.json();
+          setRagAnswer(data.answer || "");
+          setRagChunks(Array.isArray(data.retrieved_chunks) ? data.retrieved_chunks : []);
+        } catch (err) {
+          console.error("RAG 錯誤：", err);
+          setRagError("RAG 連線失敗，請確認本機後端是否啟動。");
+        } finally {
+          setRagLoading(false);
+        }
+      }
+
+      function analyzeSymptom(symptomText) {
+        if (!symptomText) return;
+        if (symptomText === "症狀不明確") {
+          setBodyPart("未明"); setQaStep(0); setAnswers({ mainComplaint: symptomText });
+          const firstQuestion = symptomDB["未明"].questions[0].q;
+          setPrompt(firstQuestion); speak(firstQuestion); setState(STATES.QA);
+          return;
+        }
+        const part = detectPart(symptomText);
+        setBodyPart(part); setQaStep(0); setAnswers({ mainComplaint: symptomText });
+        const safePart = symptomDB[part] ? part : "未明";
+        if (safePart !== part) setBodyPart("未明");
+        const firstQuestion = symptomDB[safePart].questions[0].q;
+        setPrompt(firstQuestion); speak(firstQuestion); setState(STATES.QA);
+      }
+
+      function resetAll() {
+        setState(STATES.INIT);
+        setPrompt("請說：我要掛號，或直接說出／輸入不舒服的部位或症狀");
+        setText(""); setInputValue(""); setRecording(false); setLastInputEcho("");
+        setBodyPart(""); setQaStep(0); setAnswers({}); setResult([]); setAlertMessage("");
+        setIsDirectBooking(false); 
+        setPatientInfo({ name: "", idNumber: "", birth: "", phone: "" });
+        setBooking({ department: "家醫科", doctor: "吳醫師", date: new Date().toISOString().split('T')[0], slot: timeSlots[0] });
+        setRecordingPatientInfo(false); setPatientVoiceNeedsReview(false);
+        setLastPatientVoiceTranscript(""); setRagLoading(false); setRagError("");
+        setRagAnswer(""); setRagChunks([]); setChatHistory([]);
+        setSearchId(""); setHistoryList(null); 
+      }
+
+      function startDirectBooking() {
+        setIsDirectBooking(true);
+        setPrompt("請填寫掛號基本資料以利直接預約");
+        speak("已為您切換至直接掛號流程，請輸入您的基本資料");
+        setState(STATES.PATIENT_INFO);
+      }
+
+      async function handleIncomingText(rawText) {
+        const incoming = (rawText || "").trim();
+        if (!incoming) return;
+        setInputValue("");
+        const latest = latestRef.current;
+        const { state: s, bodyPart: bp, qaStep: step, answers: ans, chatHistory: hist } = latest;
+        const updatedHistoryWithUser = [...hist, { role: "user", content: incoming }];
+        setChatHistory(updatedHistoryWithUser);
+
+        const aiResponse = await callLobsterBackend(incoming, latest.state, updatedHistoryWithUser);
+        if (aiResponse) {
+          setChatHistory(prevHistory => [...prevHistory, { role: "assistant", content: aiResponse.reply }]);
+          setPrompt(aiResponse.reply); speak(aiResponse.reply);
+          if (aiResponse.status === "error") return;
+          if (aiResponse.action === "GO_TO_QA") {
+            if (aiResponse.bodyPart) setBodyPart(aiResponse.bodyPart);
+            setState(STATES.QA); return;
+          }
+          if (aiResponse.action === "SHOW_RESULT") {
+            if (Array.isArray(aiResponse.recommendedDepts)) { setResult(aiResponse.recommendedDepts); } 
+            else if (aiResponse.detectedDept) { setResult([[aiResponse.detectedDept, 80]]); }
+            setState(STATES.RESULT);
+            const rawTextArray = [incoming, aiResponse.reply || "", aiResponse.detectedDept || "", ...(Array.isArray(aiResponse.recommendedDepts) ? aiResponse.recommendedDepts.map(d => d[0]) : [])].filter(Boolean).join(" ");
+            const cleanRagQuestion = extractKeySymptoms(rawTextArray) || incoming;
+            callRAG(cleanRagQuestion, { recommended_department: Array.isArray(aiResponse.recommendedDepts) ? aiResponse.recommendedDepts[0]?.[0] : aiResponse.detectedDept || "家醫科" });
+            return;
+          }
+          if (aiResponse.action === "EMERGENCY") {
+            setAlertMessage(aiResponse.reply); setState(STATES.ALERT); return;
+          }
+          return; 
+        }
+
+        if (s === STATES.INIT) {
+          if (incoming.includes("掛號") || incoming.length > 0) {
+            if (hasDirectSymptomHint(incoming)) { analyzeSymptom(incoming); } 
+            else {
+              setPrompt("請選擇不舒服的部位，或直接描述症狀"); speak("請選擇不舒服的部位，或直接描述症狀"); setState(STATES.SELECT_BODY_PART);
+            }
+          }
+          return;
+        }
+
+        if (s === STATES.SELECT_BODY_PART) { analyzeSymptom(incoming); return; }
+
+        if (s === STATES.QA) {
+          const currentQuestion = symptomDB[bp]?.questions?.[step];
+          if (!currentQuestion) return;
+          const newAnswers = { ...ans, [currentQuestion.key]: incoming };
+          setAnswers(newAnswers);
+          const emergency = checkEmergency(bp, newAnswers);
+          if (emergency) {
+            setAlertMessage(emergency); setState(STATES.ALERT);
+            setPrompt("系統偵測到較危急症狀"); speak("系統偵測到較危急症狀，請盡快就醫"); return;
+          }
+          const questions = symptomDB[bp]?.questions || [];
+          if (step + 1 < questions.length) {
+            const nextStep = step + 1; setQaStep(nextStep);
+            const nextQuestion = questions[nextStep].q; setPrompt(nextQuestion); speak(nextQuestion);
+          } else {
+            const calculated = calculate(bp, newAnswers);
+            const topDept = calculated[0][0];
+            setResult(calculated);
+            const topDoc = doctorsByDept[topDept][0];
+            const available = doctorSchedules[topDoc] || timeSlots;
+            setBooking(prev => ({ ...prev, department: topDept, doctor: topDoc, slot: available[0] }));
+            setPrompt("已完成初步分流分析"); speak("已完成初步分流分析"); setState(STATES.RESULT);
+            callRAG(newAnswers.mainComplaint, { body_part: bp, recommended_department: topDept });
+          }
+        }
+      }
+
+      useEffect(() => {
+        if (!text) return;
+        handleIncomingText(text);
+        setText("");
+      }, [text]);
+
+      // 🌟 核心功能優化：問診中點擊「上一步」的處理邏輯
+      function goBackQa() {
+        const { bodyPart: bp, qaStep: step, answers: ans } = latestRef.current;
+        const questions = symptomDB[bp]?.questions || [];
+        const msg = "請選擇不舒服的部位，或直接描述症狀";
+        
+        // 如果已經是第一題，再按上一步就退回到「選擇部位」頁面
+        if (!questions.length || step <= 0) {
+          setState(STATES.SELECT_BODY_PART); 
+          setPrompt(msg); 
+          speak(msg); 
+          setLastInputEcho(""); 
+          setInputValue(""); 
+          return;
+        }
+        
+        // 回到上一題，並移除剛才回答過的那一題數據
+        const nextStep = step - 1;
+        const keysToDrop = questions.slice(nextStep + 1).map((q) => q.key);
+        const newAnswers = { ...ans };
+        for (const k of keysToDrop) delete newAnswers[k];
+        
+        setAnswers(newAnswers); 
+        setQaStep(nextStep);
+        
+        const prevQuestion = questions[nextStep].q; 
+        const prevKey = questions[nextStep].key; 
+        const prevAnswer = newAnswers?.[prevKey] || "";
+        
+        setPrompt(prevQuestion); 
+        speak(prevQuestion); 
+        setLastInputEcho(prevAnswer || ""); 
+        setInputValue(prevAnswer);
+      }
+
+      function renderQaProgress() {
+        const questions = symptomDB[bodyPart]?.questions || [];
+        if (!questions.length) return null;
+        const total = questions.length; const current = Math.min(qaStep + 1, total); const pct = Math.round((current / total) * 100);
+        return (
+          <div className="qa-topbar">
+            <div className="qa-meta">
+              <div className="qa-steps">第 {current}/{total} 題</div>
+              <div className="qa-bar" aria-hidden="true"><div className="qa-bar-fill" style={{ width: `${pct}%` }} /></div>
+            </div>
+            <button type="button" className="ghost-btn" onClick={goBackQa}>上一步</button>
+          </div>
+        );
+      }
+
+      function renderQuickOptions() {
+        if (state !== STATES.QA) return null;
+        const questions = symptomDB[bodyPart]?.questions || [];
+        const currentQ = questions[qaStep];
+        if (!currentQ || currentQ.key !== "duration") return null;
+        const options = ["一天", "兩天", "三天", "一週", "大於一週"];
+        return (
+          <div className="option-row" aria-label="快捷選項">
+            {options.map((opt) => (<button key={opt} type="button" className="option-btn" onClick={() => submitQuickOption(opt)}>{opt}</button>))}
+          </div>
+        );
+      }
+
+      function submitPatientInfo() {
+        if (patientVoiceNeedsReview) { alert("請先核對語音辨識結果，必要時手動修正欄位後，再按下「確認辨識結果」。"); return; }
+        const { name, idNumber, birth, phone } = patientInfo;
+        if (!name || !idNumber || !birth || !phone) { alert("請完整填寫基本資料。"); return; }
+        setPrompt("請確認您的詳細掛號看診資訊");
+        speak("資料填寫完成，請確認預約資訊");
+        setState(STATES.BOOKING);
+      }
+
+      function handlePatientInfoChange(e) {
+        const { name, value } = e.target;
+        setPatientInfo((prev) => ({ ...prev, [name]: value }));
+      }
+
+      function renderBodyDiagram() {
+        return (
+          <div className="body-diagram-wrap">
+            <svg className="body-diagram" viewBox="0 0 220 420" role="img" aria-label="人體部位選擇圖">
+              <circle cx="110" cy="42" r="28" className={`part ${bodyPart === "頭" ? "selected" : ""}`} onClick={() => analyzeSymptom("頭不舒服")} tabIndex="0" role="button" />
+              <rect x="78" y="78" width="64" height="74" rx="24" className={`part ${bodyPart === "胸" ? "selected" : ""}`} onClick={() => analyzeSymptom("胸口不舒服")} tabIndex="0" role="button" />
+              <rect x="72" y="154" width="76" height="70" rx="24" className={`part ${bodyPart === "腹部" ? "selected" : ""}`} onClick={() => analyzeSymptom("肚子不舒服")} tabIndex="0" role="button" />
+              <rect x="93" y="65" width="34" height="16" rx="8" className={`part ${bodyPart === "喉嚨" ? "selected" : ""}`} onClick={() => analyzeSymptom("喉嚨不舒服")} tabIndex="0" role="button" />
+              <rect x="36" y="88" width="30" height="122" rx="16" className={`part ${bodyPart === "關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("手腳關節不舒服")} tabIndex="0" role="button" />
+              <rect x="154" y="88" width="30" height="122" rx="16" className={`part ${bodyPart === "關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("手腳關節不舒服")} tabIndex="0" role="button" />
+              <rect x="84" y="224" width="24" height="132" rx="14" className={`part ${bodyPart === "關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("腿部關節不舒服")} tabIndex="0" role="button" />
+              <rect x="112" y="224" width="24" height="132" rx="14" className={`part ${bodyPart === "關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("腿部關節不舒服")} tabIndex="0" role="button" />
+              <circle cx="98" cy="40" r="5" className={`part eye-dot ${bodyPart === "眼睛" ? "selected" : ""}`} onClick={() => analyzeSymptom("眼睛不舒服")} tabIndex="0" role="button" />
+              <circle cx="122" cy="40" r="5" className={`part eye-dot ${bodyPart === "眼睛" ? "selected" : ""}`} onClick={() => analyzeSymptom("眼睛不舒服")} tabIndex="0" role="button" />
+              <rect x="95" y="182" width="30" height="36" rx="12" className={`part ${bodyPart === "婦科" ? "selected" : ""}`} onClick={() => analyzeSymptom("婦科不舒服")} tabIndex="0" role="button" />
+            </svg>
+            <div className="body-legend">
+              <button type="button" className={`chip ${bodyPart === "頭" ? "active" : ""}`} onClick={() => analyzeSymptom("頭痛")}>頭</button>
+              <button type="button" className={`chip ${bodyPart === "胸" ? "active" : ""}`} onClick={() => analyzeSymptom("胸悶")}>胸</button>
+              <button type="button" className={`chip ${bodyPart === "腹部" ? "active" : ""}`} onClick={() => analyzeSymptom("肚子痛")}>腹部</button>
+              <button type="button" className={`chip ${bodyPart === "喉嚨" ? "active" : ""}`} onClick={() => analyzeSymptom("喉嚨痛")}>喉嚨</button>
+              <button type="button" className={`chip ${bodyPart === "皮膚" ? "active" : ""}`} onClick={() => analyzeSymptom("皮膚癢")}>皮膚</button>
+              <button type="button" className={`chip ${bodyPart === "關節" ? "active" : ""}`} onClick={() => analyzeSymptom("關節痛")}>關節</button>
+              <button type="button" className={`chip ${bodyPart === "婦科" ? "active" : ""}`} onClick={() => analyzeSymptom("經痛")}>婦科</button>
+              <button type="button" className={`chip ${bodyPart === "眼睛" ? "active" : ""}`} onClick={() => analyzeSymptom("眼睛痛")}>眼睛</button>
+            </div>
+          </div>
+        );
+      }
+
+      function renderRagSection() {
+        return (
+          <div className="rag-panel">
+            <div className="rag-panel-header">
+              <div><div className="rag-badge">RAG 知識檢索</div><h4 className="rag-title">AI 檢索增強建議</h4></div>
+              {ragLoading && <div className="rag-loading">分析中...</div>}
+            </div>
+            {ragError ? <div className="rag-error">{ragError}</div> : null}
+            {!ragLoading && !ragError && ragAnswer ? (<div className="rag-answer-card"><div className="rag-answer-label">AI 建議</div><p>{ragAnswer}</p></div>) : null}
+            {!ragLoading && !ragError && ragChunks.length > 0 ? (
+              <div className="rag-sources">
+                <div className="rag-answer-label">檢索來源</div>
+                {ragChunks.map((chunk, idx) => (
+                  <div className="rag-source-card" key={idx}>
+                    <div className="rag-source-top">
+                      <span className="rag-chip">{chunk.category || chunk.metadata?.category || "知識片段"}</span>
+                      <span className="rag-score">相似度：{typeof chunk.score === "number" ? chunk.score.toFixed(3) : "N/A"}</span>
+                    </div>
+                    <p className="rag-source-text">{chunk.text || chunk.content || chunk.chunk_text || "無內容"}</p>
+                    <div className="rag-source-meta">來源：{chunk.source || chunk.metadata?.source || "本地知識庫"}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {!ragLoading && !ragError && !ragAnswer && ragChunks.length === 0 ? (<div className="rag-empty">目前尚未取得檢索結果。</div>) : null}
+          </div>
+        );
+      }
+
+      function renderDefaultInput() {
+        return (
+          <>
+            <div className="status-card">
+              <div className="status">你可以透過語音或文字描述症狀，系統將自動執行：<strong>症狀理解 → 問診 → 分流 → RAG 查詢 → 掛號建議</strong></div>
+            </div>
+            <div className="hero-card">
+              <div className="mic-panel">
+                <button type="button" className={`mic-btn ${recording ? "recording" : ""}`} onClick={recording ? stopRecord : startRecord}>{recording ? "停止錄音" : "開始語音"}</button>
+                <p className="helper-text">可直接說：「我要掛號」、「我胸悶」、「我頭很痛」等。</p>
+              </div>
+              {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
+              <div className="input-row">
+                <input className="text-input" value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="請輸入症狀，例如：胸悶、頭痛、喉嚨痛" onKeyDown={(e) => { if (e.key === "Enter") submitManualInput(); }} />
+                <button type="button" className="mini-btn" onClick={submitManualInput}>送出</button>
+              </div>
+              
+              <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <button type="button" className="btn" style={{ background: 'linear-gradient(135deg, #0284c7, #0369a1)', boxShadow: '0 10px 20px rgba(3, 105, 161, 0.2)' }} onClick={startDirectBooking}>
+                  ⏩ 略過問診，直接選科掛號
+                </button>
+                
+                <button type="button" className="secondary-btn" onClick={() => {
+                  setState(STATES.CHECK_HISTORY);
+                  setPrompt("請輸入身分證字號查詢掛號紀錄");
+                  speak("請輸入您的身分證字號以查詢預約狀態");
+                }}>
+                  🔍 查詢我的掛號紀錄
+                </button>
+              </div>
+            </div>
+          </>
+        );
+      }
+
+      function renderBooking() {
+        const availableSlots = doctorSchedules[booking.doctor] || timeSlots;
+
+        return (
+          <div className="form-card">
+            <h3>確認詳細掛號資訊</h3>
+            <div className="booking-info-group">
+              <label className="field-label">預約日期</label>
+              <input 
+                type="date" 
+                className="text-input" 
+                name="date"
+                min={new Date().toISOString().split('T')[0]}
+                value={booking.date}
+                onChange={handleBookingChange}
+              />
+            </div>
+
+            <div className="booking-info-group">
+              <label className="field-label">預約科別</label>
+              <select
+                name="department"
+                value={booking.department}
+                onChange={handleBookingChange}
+                className="text-input"
+              >
+                {Object.keys(doctorsByDept).map((dept) => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="booking-info-group">
+              <label className="field-label">看診醫師</label>
+              <select
+                name="doctor"
+                value={booking.doctor}
+                onChange={handleBookingChange}
+                className="text-input"
+              >
+                {(doctorsByDept[booking.department] || []).map((doc) => (
+                  <option key={doc} value={doc}>{doc}</option>
+                ))}
+              </select>
+              <div style={{ fontSize: '12.5px', color: '#1976d2', marginTop: '6px', fontWeight: 'bold' }}>
+                💡 {booking.doctor} 的看診時段為：{availableSlots.map(s => s.split(' ')[0]).join('、')}
+              </div>
+            </div>
+
+            <div className="booking-info-group">
+              <label className="field-label">看診時段</label>
+              <div className="slot-picker-container" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '15px' }}>
+                {availableSlots.map(s => (
+                  <button 
+                    key={s} 
+                    type="button"
+                    className={`option-btn ${booking.slot === s ? 'active' : ''}`}
+                    style={{ 
+                      flex: '1 1 100px', 
+                      padding: '10px 5px', 
+                      border: '1px solid #ccc', 
+                      borderRadius: '8px', 
+                      cursor: 'pointer', 
+                      backgroundColor: booking.slot === s ? '#2563eb' : '#fff', 
+                      color: booking.slot === s ? '#fff' : '#333',
+                      fontSize: '14px'
+                    }}
+                    onClick={() => setBooking({...booking, slot: s})}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button 
+              type="button"
+              className="btn" 
+              style={{ marginTop: '20px' }} 
+              onClick={async (e) => {
+                e.preventDefault(); 
+                try {
+                  const response = await fetch("http://127.0.0.1:8000/api/booking/confirm", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      name: patientInfo.name,
+                      id_number: patientInfo.idNumber,
+                      department: booking.department,
+                      doctor: booking.doctor,
+                      slot: `${booking.date} ${booking.slot}` 
+                    })
+                  });
+                  const data = await response.json();
+                  if (data.status === "success") {
+                    speak(`掛號成功，您預約了 ${booking.date} ${booking.slot} 的 ${booking.department}。`);
+                    setState(STATES.COMPLETE);
+                  } else {
+                    alert("儲存失敗：" + data.message);
+                  }
+                } catch (err) {
+                  console.error("預約 API 呼叫失敗", err);
+                  speak(`掛號成功，請妥善保存畫面資訊。`);
+                  setState(STATES.COMPLETE); 
+                }
+              }}>
+              確認掛號
+            </button>
+
+            <button type="button" className="secondary-btn" onClick={() => {
+              setPrompt("請填寫掛號基本資料");
+              speak("返回上一步修改基本資料");
+              setState(STATES.PATIENT_INFO);
+            }}>
+              上一步（修改基本資料）
+            </button>
+          </div>
+        );
+      }
+
+      function renderCheckHistory() {
+        const handleSearch = async () => {
+          if (!searchId.trim()) {
+            alert("請輸入身分證字號");
+            return;
+          }
+          setIsSearching(true);
+          try {
+            const response = await fetch("http://127.0.0.1:8000/api/booking/history", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id_number: searchId.trim() })
+            });
+            const data = await response.json();
+            if (data.status === "success") {
+              setHistoryList(data.data);
+              if (data.data.length === 0) {
+                speak("查無掛號紀錄。");
+              } else {
+                speak(`為您找到 ${data.data.length} 筆紀錄。`);
+              }
+            } else {
+              alert("查詢失敗：" + data.message);
+            }
+          } catch (err) {
+            console.error("查詢 API 呼叫失敗", err);
+            alert("連線後端失敗，請確認伺服器已啟動。");
+          } finally {
+            setIsSearching(false);
+          }
+        };
+
+        return (
+          <div className="form-card">
+            <h3>個人掛號紀錄查詢</h3>
+            <label className="field-label">請輸入身分證字號</label>
+            <div className="input-row">
+              <input 
+                className="text-input" 
+                value={searchId} 
+                onChange={(e) => setSearchId(e.target.value.toUpperCase())} 
+                placeholder="例如：A123456789" 
+                onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }} 
+              />
+              <button type="button" className="mini-btn" onClick={handleSearch} disabled={isSearching}>
+                {isSearching ? "查詢中..." : "查詢"}
+              </button>
+            </div>
+
+            {historyList !== null && (
+              <div style={{ marginTop: '20px' }}>
+                <h4 style={{ borderBottom: '1px solid #eee', paddingBottom: '8px' }}>查詢結果</h4>
+                {historyList.length === 0 ? (
+                  <p style={{ color: '#666', textAlign: 'center', padding: '15px' }}>目前沒有您的掛號紀錄。</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {historyList.map((item, idx) => (
+                      <div key={idx} style={{ padding: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', backgroundColor: '#f9f9f9' }}>
+                        <p style={{ margin: '0 0 5px 0', fontWeight: 'bold', color: '#1976d2' }}>{item.department} - {item.doctor}</p>
+                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}>看診時間：{item.slot}</p>
+                        <p style={{ margin: '0', fontSize: '12px', color: '#888' }}>預約者：{item.name} | 預約建立於：{item.created_at}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button type="button" className="secondary-btn" onClick={resetAll}>返回主畫面</button>
+          </div>
+        );
+      }
+
+      function renderContent() {
+        if (state === STATES.INIT) {
+          return (
+            <>
+              <div className="hero-card">
+                <h3 className="section-title">開始智慧問診</h3>
+                <p className="helper-text">可直接說出症狀，或點選下方人體圖快速開始。</p>
+                <div className="body-select-card compact">{renderBodyDiagram()}</div>
+              </div>
+              <div style={{ marginTop: "18px" }}>{renderDefaultInput()}</div>
+            </>
+          );
+        }
+
+        if (state === STATES.SELECT_BODY_PART) {
+          return (
+            <>
+              <div className="body-select-card">
+                <div className="section-title">請點擊人體圖上的不適部位</div>
+                <p className="body-select-subtitle">也可以直接輸入症狀，例如：胸悶、頭痛、肚子痛</p>
+                {renderBodyDiagram()}
+              </div>
+              <div style={{ marginTop: "12px", display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <button type="button" className="btn" style={{ background: 'linear-gradient(135deg, #0284c7, #0369a1)' }} onClick={startDirectBooking}>
+                  ⏩直接選科掛號
+                </button>
+                <button type="button" className="secondary-btn" onClick={() => analyzeSymptom("症狀不明確")}>無法確定不適部位</button>
+                
+                <button type="button" className="secondary-btn" style={{ border: '1px dashed #94a3b8' }} onClick={resetAll}>
+                  ⬅ 回主畫面
+                </button>
+              </div>
+              <div style={{ marginTop: "18px" }}>{renderDefaultInput()}</div>
+            </>
+          );
+        }
+
+        if (state === STATES.QA) {
+          return (
+            <>
+              <div className="form-card">
+                {renderQaProgress()}
+                <h3>{prompt}</h3>
+                {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
+                {renderQuickOptions()}
+                <div className="input-row">
+                  <input className="text-input" value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="請輸入你的回答" onKeyDown={(e) => { if (e.key === "Enter") submitManualInput(); }} />
+                  <button type="button" className="mini-btn" onClick={submitManualInput}>送出</button>
+                </div>
+                
+                {/* 🌟 核心更新：在問診核心操作區底部加入高易用性的控制按鈕組 */}
+                <div style={{ display: 'flex', gap: '10px', marginTop: '18px' }}>
+                  <button type="button" className="secondary-btn" style={{ margin: 0, flex: 1 }} onClick={goBackQa}>
+                    ⬅ 上一步
+                  </button>
+                  <button type="button" className={`mini-btn ${recording ? "recording" : ""}`} style={{ margin: 0, flex: 1.5, padding: '14px' }} onClick={recording ? stopRecord : startRecord}>
+                    {recording ? "🛑 停止錄音" : "🎙 語音回答"}
+                  </button>
+                </div>
+              </div>
+            </>
+          );
+        }
+
+        if (state === STATES.ALERT) {
+          return (
+            <>
+              <div className="alert-box">
+                <h3>⚠ 緊急提醒</h3>
+                <p>{alertMessage}</p>
+                <p className="alert-disclaimer">本系統僅供初步分流，若症狀持續惡化請立即就醫。</p>
+              </div>
+              <button type="button" className="secondary-btn" onClick={resetAll}>重新開始</button>
+            </>
+          );
+        }
+
+        if (state === STATES.RESULT) {
+          return (
+            <>
+              <div className="result-card summary-card">
+                <h4>初步分流結果</h4>
+                <p>根據您的症狀，系統建議優先掛號：<strong> {result[0]?.[0] || "家醫科"} </strong></p>
+              </div>
+              <div className="result-card">
+                <h4>推薦科別</h4>
+                {result.map((item, idx) => {
+                  const department = Array.isArray(item) ? item[0] : item;
+                  const score = Array.isArray(item) ? item[1] : 80;
+                  const percent = Math.min(100, Math.round((score / 80) * 100));
+                  return (
+                    <div className="confidence" key={department}>
+                      <div className="confidence-row">
+                        <span className="confidence-label">#{idx + 1} {department}</span>
+                        <span className="confidence-value">{percent}%</span>
+                      </div>
+                      <div className="confidence-bar"><div className="confidence-bar-fill" style={{ width: `${percent}%` }} /></div>
+                    </div>
+                  );
+                })}
+              </div>
+              {renderRagSection()}
+              <button type="button" className="btn" onClick={() => {
+                setPrompt("請填寫掛號基本資料");
+                speak("問診完成，請填寫基本資料");
+                setState(STATES.PATIENT_INFO);
+              }}>進入掛號資料填寫</button>
+              
+              <button type="button" className="secondary-btn" onClick={goBackQa}>
+                上一步（修改症狀回答）
+              </button>
+            </>
+          );
+        }
+
+        if (state === STATES.PATIENT_INFO) {
+          return (
+            <div className="form-card">
+              <h3>填寫基本資料</h3>
+              <div className="patient-info-mic">
+                <p className="patient-voice-hint">可直接用語音一次說出姓名、身分證字號、生日與手機號碼。</p>
+                <button type="button" className={`mic-btn ${recordingPatientInfo ? "recording" : ""}`} onClick={recordingPatientInfo ? stopPatientInfoRecord : startPatientInfoRecord}>{recordingPatientInfo ? "停止語音輸入" : "語音填寫資料"}</button>
+              </div>
+              {patientVoiceNeedsReview ? (
+                <div className="patient-voice-review">
+                  <p><strong>已辨識內容，請確認：</strong></p>
+                  <span className="raw">{lastPatientVoiceTranscript}</span>
+                  <div className="review-actions"><button type="button" className="mini-btn" onClick={confirmPatientVoiceReview}>確認辨識結果</button></div>
+                </div>
+              ) : null}
+              <label className="field-label">姓名</label>
+              <input className="text-input" name="name" value={patientInfo.name} onChange={handlePatientInfoChange} />
+              <label className="field-label">身分證字號</label>
+              <input className="text-input" name="idNumber" value={patientInfo.idNumber} onChange={handlePatientInfoChange} />
+              <label className="field-label">生日</label>
+              <input className="text-input" name="birth" value={patientInfo.birth} onChange={handlePatientInfoChange} placeholder="YYYY/MM/DD" />
+              <label className="field-label">手機</label>
+              <input className="text-input" name="phone" value={patientInfo.phone} onChange={handlePatientInfoChange} />
+              <button type="button" className="btn" onClick={submitPatientInfo}>下一步</button>
+              
+              <button type="button" className="secondary-btn" onClick={() => {
+                if (isDirectBooking) {
+                  resetAll();
+                } else {
+                  setPrompt("這是您的初步分流推薦");
+                  speak("返回分流推薦結果");
+                  setState(STATES.RESULT);
+                }
+              }}>
+                上一步
+              </button>
+            </div>
+          );
+        }
+
+        if (state === STATES.BOOKING) {
+          return renderBooking();
+        }
+
+        if (state === STATES.COMPLETE) {
+          return (
+            <>
+              <div className="success">🎉 掛號手續已完成！</div>
+              <div className="result-card summary-card" style={{ border: '2px dashed #4caf50', backgroundColor: '#f9fff9', padding: '20px' }}>
+                <h4 style={{ color: '#2e7d32', textAlign: 'center', marginBottom: '15px' }}>預約成功證明</h4>
+                <p><strong>姓名：</strong> {patientInfo.name}</p>
+                <p><strong>科別：</strong> {booking.department}</p>
+                <p><strong>醫師：</strong> {booking.doctor}</p>
+                <p><strong>日期：</strong> {booking.date}</p>
+                <p><strong>時間：</strong> {booking.slot}</p>
+                
+                <div style={{ marginTop: '20px', paddingTop: '15px', borderTop: '1px solid #c8e6c9', textAlign: 'center' }}>
+                  <p style={{ fontSize: '0.9em', color: '#555', margin: 0 }}>📌 請截圖保存此畫面，並於看診當日提早 10 分鐘報到。</p>
+                </div>
+              </div>
+              <button type="button" className="secondary-btn" onClick={resetAll} style={{ marginTop: '20px' }}>確認並回首頁</button>
+            </>
+          );
+        }
+
+        if (state === STATES.CHECK_HISTORY) {
+          return renderCheckHistory();
+        }
+
+        return renderDefaultInput();
+      }
+
+      return (
+        <div className="app">
+          <div className="header">
+            <div className="assistant">🩺</div>
+            <div className="header-copy">
+              <div className="eyebrow">Smart Voice Triage + RAG</div>
+              <h2>智慧語音掛號助理</h2>
+              <p className="prompt">{prompt}</p>
+            </div>
+          </div>
+          {renderContent()}
+          <div className="footer-note">
+            本介面為前端示意版，非醫療診斷；若有胸痛、呼吸困難、意識不清等急症，請立即就醫或撥打 119。
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
