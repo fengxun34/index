@@ -6,17 +6,17 @@ import os
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 def update_system():
-    print("--- 🚀 開始更新 SQL 知識庫 ---")
-    
-    # 🌟 確保絕對路徑，防止讀錯資料夾
+    print("--- 🚀 開始更新骨科知識庫 ---")
+
+    # 確保絕對路徑，防止讀錯資料夾
     base_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(base_dir, "medical_sheet.csv")
     db_path = os.path.join(base_dir, "vector_store.db")
     pkl_path = os.path.join(base_dir, "vectorizer.pkl")
 
-    # 1. 讀取 CSV (🌟 自動處理 Windows Excel 中文編碼問題)
+    # 1. 讀取 CSV (自動處理 Windows Excel 中文編碼問題)
     try:
-        df = pd.read_csv(csv_path, encoding='utf-8-sig') # 先嘗試標準 UTF-8
+        df = pd.read_csv(csv_path, encoding='utf-8-sig')  # 先嘗試標準 UTF-8
     except UnicodeDecodeError:
         try:
             df = pd.read_csv(csv_path, encoding='big5')  # 失敗的話改用台灣常用的 Big5
@@ -47,7 +47,7 @@ def update_system():
     with open(pkl_path, "wb") as f:
         pickle.dump(vectorizer, f)
 
-    # 3. 寫入 SQLite
+    # 3. 寫入 SQLite（僅供 RAG 知識檢索使用，非病人資料）
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute("DROP TABLE IF EXISTS medical_chunks")
@@ -66,10 +66,10 @@ def update_system():
             "INSERT INTO medical_chunks (department, content, vector_json) VALUES (?, ?, ?)",
             (doc['dept'], doc['content'], json.dumps(vec_list))
         )
-    
+
     conn.commit()
     conn.close()
-    print(f"✅ SQL 資料庫更新完成！已經將最新的 {len(knowledge_data)} 筆資料存入：\n{db_path}")
+    print(f"✅ 知識庫更新完成！已經將最新的 {len(knowledge_data)} 筆骨科資料存入：\n{db_path}")
 
 if __name__ == "__main__":
     update_system()
