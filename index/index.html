@@ -214,6 +214,10 @@
       const [searchId, setSearchId] = useState("");
       const [historyList, setHistoryList] = useState(null);
       const [isSearching, setIsSearching] = useState(false);
+      const [actionLoading, setActionLoading] = useState(null);
+      const [rescheduleTarget, setRescheduleTarget] = useState(null);
+      const [rescheduleDate, setRescheduleDate] = useState(new Date().toISOString().split('T')[0]);
+      const [rescheduleSlot, setRescheduleSlot] = useState("");
 
       const recognitionRef = useRef(null);
       const patientInfoRecognitionRef = useRef(null);
@@ -388,6 +392,21 @@
         return /(不舒服|難受|好痛|很痛|刺痛|悶痛|脹痛|酸痛|痠痛|麻|無力|腫脹|卡住|變形|瘀青)/.test(t);
       }
 
+      // 直接說出「科別」或「醫師姓名」時，跳過問診直接帶出該門診（比照長庚可指定醫師掛號的做法）
+      function detectDoctorMention(content) {
+        const t = (content || "").trim();
+        if (!t) return null;
+        for (const [dept, doctors] of Object.entries(doctorsByDept)) {
+          for (const doc of doctors) {
+            if (t.includes(doc)) return { department: dept, doctor: doc };
+          }
+        }
+        for (const dept of Object.keys(doctorsByDept)) {
+          if (t.includes(dept)) return { department: dept, doctor: doctorsByDept[dept][0] };
+        }
+        return null;
+      }
+
       function checkEmergency(part, ans) {
         const joined = Object.values(ans).join(" ");
         if ((part === "頸椎" || part === "腰椎") && /(大小便失禁|下肢無力癱瘓|馬鞍區麻木|意識不清)/.test(joined)) {
@@ -490,6 +509,15 @@
         setPrompt(firstQuestion); speak(firstQuestion); setState(STATES.QA);
       }
 
+      function applyDirectDoctorSelection({ department, doctor }) {
+        const availableSlots = doctorSchedules[doctor] || timeSlots;
+        setResult([[department, 100]]);
+        setBooking((prev) => ({ ...prev, department, doctor, slot: availableSlots[0] }));
+        const msg = `已為您找到 ${doctor}（${department}）的門診，請確認安排`;
+        setPrompt(msg); speak(msg);
+        setState(STATES.RESULT);
+      }
+
       function resetAll() {
         setState(STATES.INIT);
         setPrompt(INITIAL_PROMPT);
@@ -546,6 +574,8 @@
         }
 
         if (s === STATES.INIT) {
+          const doctorMatch = detectDoctorMention(incoming);
+          if (doctorMatch) { applyDirectDoctorSelection(doctorMatch); return; }
           if (incoming.includes("掛號") || incoming.length > 0) {
             if (hasDirectSymptomHint(incoming)) { analyzeSymptom(incoming); }
             else {
@@ -555,7 +585,11 @@
           return;
         }
 
-        if (s === STATES.SELECT_BODY_PART) { analyzeSymptom(incoming); return; }
+        if (s === STATES.SELECT_BODY_PART) {
+          const doctorMatch = detectDoctorMention(incoming);
+          if (doctorMatch) { applyDirectDoctorSelection(doctorMatch); return; }
+          analyzeSymptom(incoming); return;
+        }
 
         if (s === STATES.QA) {
           const currentQuestion = symptomDB[bp]?.questions?.[step];
@@ -771,7 +805,7 @@
             <div className="hero-card">
               <div className="mic-panel">
                 <button type="button" className={`mic-btn ${recording ? "recording" : ""}`} onClick={recording ? stopRecord : startRecord}>{recording ? "停止錄音" : "開始語音"}</button>
-                <p className="helper-text">可直接說：「我肩膀痛」、「我膝蓋腫」、「我腰痛合併腳麻」等。</p>
+                <p className="helper-text">可直接說：「我肩膀痛」、「我膝蓋腫」；也可以直接說「我要掛高醫師」或「我要掛脊椎外科」跳過問診。</p>
               </div>
               {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
               <div className="input-row">
@@ -784,9 +818,9 @@
                 <span className="link-sep">・</span>
                 <button type="button" className="link-btn" onClick={() => {
                   setState(STATES.CHECK_HISTORY);
-                  setPrompt("請輸入身分證字號查詢掛號紀錄");
-                  speak("請輸入您的身分證字號以查詢預約狀態");
-                }}>🔍 查詢我的掛號紀錄</button>
+                  setPrompt("請輸入身分證字號查詢、取消或改期掛號");
+                  speak("請輸入您的身分證字號以查詢、取消或改期掛號");
+                }}>🔍 查詢／取消／改期掛號</button>
               </div>
             </div>
           </>
@@ -914,9 +948,65 @@
           }
         };
 
+        const handleCancel = async (item) => {
+          if (!window.confirm(`確定要取消 ${item.slot} ${item.doctor} 的掛號嗎？`)) return;
+          setActionLoading(item.appointment_no);
+          try {
+            const response = await fetch("http://127.0.0.1:8000/api/booking/cancel", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id_number: searchId.trim(), appointment_no: item.appointment_no })
+            });
+            const data = await response.json();
+            if (data.status === "success") {
+              speak(data.message);
+              setHistoryList((prev) => prev.map((h) => h.appointment_no === item.appointment_no ? { ...h, status: "cancelled" } : h));
+            } else {
+              alert("取消失敗：" + data.message);
+            }
+          } catch (err) {
+            console.error("取消掛號 API 呼叫失敗", err);
+            alert("連線後端失敗，請確認伺服器已啟動。");
+          } finally {
+            setActionLoading(null);
+          }
+        };
+
+        const openReschedule = (item) => {
+          const availableSlots = doctorSchedules[item.doctor] || timeSlots;
+          setRescheduleTarget(item.appointment_no);
+          setRescheduleDate(new Date().toISOString().split('T')[0]);
+          setRescheduleSlot(availableSlots[0]);
+        };
+
+        const confirmReschedule = async (item) => {
+          setActionLoading(item.appointment_no);
+          try {
+            const newSlot = `${rescheduleDate} ${rescheduleSlot}`;
+            const response = await fetch("http://127.0.0.1:8000/api/booking/reschedule", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id_number: searchId.trim(), appointment_no: item.appointment_no, new_slot: newSlot })
+            });
+            const data = await response.json();
+            if (data.status === "success") {
+              speak(data.message);
+              setHistoryList((prev) => prev.map((h) => h.appointment_no === item.appointment_no ? { ...h, slot: newSlot } : h));
+              setRescheduleTarget(null);
+            } else {
+              alert("改期失敗：" + data.message);
+            }
+          } catch (err) {
+            console.error("改期 API 呼叫失敗", err);
+            alert("連線後端失敗，請確認伺服器已啟動。");
+          } finally {
+            setActionLoading(null);
+          }
+        };
+
         return (
           <div className="form-card">
-            <h3>個人掛號紀錄查詢</h3>
+            <h3>掛號查詢／取消／改期</h3>
             <label className="field-label">請輸入身分證字號</label>
             <div className="input-row">
               <input
@@ -938,15 +1028,68 @@
                   <p style={{ color: '#666', textAlign: 'center', padding: '15px' }}>目前沒有您的掛號紀錄。</p>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {historyList.map((item, idx) => (
-                      <div key={idx} style={{ padding: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', backgroundColor: '#f9f9f9' }}>
-                        <p style={{ margin: '0 0 5px 0', fontWeight: 'bold', color: '#1976d2' }}>
-                          {item.appointment_no ? `#${item.appointment_no} ` : ''}{item.department} - {item.doctor}
-                        </p>
-                        <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}>看診時間：{item.slot}</p>
-                        <p style={{ margin: '0', fontSize: '12px', color: '#888' }}>預約者：{item.name} | 預約建立於：{item.created_at}</p>
-                      </div>
-                    ))}
+                    {historyList.map((item, idx) => {
+                      const isCancelled = item.status === "cancelled";
+                      const isBusy = actionLoading === item.appointment_no;
+                      return (
+                        <div key={idx} style={{ padding: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', backgroundColor: isCancelled ? '#f5f5f5' : '#f9f9f9', opacity: isCancelled ? 0.7 : 1 }}>
+                          <p style={{ margin: '0 0 5px 0', fontWeight: 'bold', color: '#1976d2' }}>
+                            {item.appointment_no ? `#${item.appointment_no} ` : ''}{item.department} - {item.doctor}
+                            {isCancelled ? <span style={{ marginLeft: '8px', fontSize: '12px', color: '#c0392b', fontWeight: 'bold' }}>已取消</span> : null}
+                          </p>
+                          <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}>看診時間：{item.slot}</p>
+                          <p style={{ margin: '0', fontSize: '12px', color: '#888' }}>預約者：{item.name} | 預約建立於：{item.created_at}</p>
+
+                          {!isCancelled ? (
+                            <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                              <button type="button" className="mini-btn" style={{ margin: 0, flex: 1, backgroundColor: '#fff', color: '#1976d2', border: '1px solid #1976d2' }} onClick={() => openReschedule(item)} disabled={isBusy}>
+                                改期
+                              </button>
+                              <button type="button" className="mini-btn" style={{ margin: 0, flex: 1, backgroundColor: '#fff', color: '#c0392b', border: '1px solid #c0392b' }} onClick={() => handleCancel(item)} disabled={isBusy}>
+                                {isBusy ? "處理中..." : "取消掛號"}
+                              </button>
+                            </div>
+                          ) : null}
+
+                          {rescheduleTarget === item.appointment_no ? (
+                            <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fff', border: '1px dashed #1976d2', borderRadius: '8px' }}>
+                              <label className="field-label">新的預約日期</label>
+                              <input
+                                type="date"
+                                className="text-input"
+                                min={new Date().toISOString().split('T')[0]}
+                                value={rescheduleDate}
+                                onChange={(e) => setRescheduleDate(e.target.value)}
+                              />
+                              <label className="field-label" style={{ marginTop: '10px', display: 'block' }}>新的看診時段（{item.doctor}）</label>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                {(doctorSchedules[item.doctor] || timeSlots).map((s) => (
+                                  <button
+                                    key={s}
+                                    type="button"
+                                    className="option-btn"
+                                    style={{
+                                      flex: '1 1 100px', padding: '10px 5px', border: '1px solid #ccc', borderRadius: '8px',
+                                      backgroundColor: rescheduleSlot === s ? '#2563eb' : '#fff',
+                                      color: rescheduleSlot === s ? '#fff' : '#333', fontSize: '14px'
+                                    }}
+                                    onClick={() => setRescheduleSlot(s)}
+                                  >
+                                    {s}
+                                  </button>
+                                ))}
+                              </div>
+                              <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                                <button type="button" className="secondary-btn" style={{ margin: 0, flex: 1 }} onClick={() => setRescheduleTarget(null)}>取消</button>
+                                <button type="button" className="mini-btn" style={{ margin: 0, flex: 1 }} onClick={() => confirmReschedule(item)} disabled={isBusy}>
+                                  {isBusy ? "處理中..." : "確認改期"}
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

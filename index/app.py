@@ -90,6 +90,15 @@ class BookingRequest(BaseModel):
 class HistoryRequest(BaseModel):
     id_number: str
 
+class CancelRequest(BaseModel):
+    id_number: str
+    appointment_no: int
+
+class RescheduleRequest(BaseModel):
+    id_number: str
+    appointment_no: int
+    new_slot: str
+
 # ===== RAG 知識庫（本地 SQLite 向量庫，非病人個資） =====
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "vector_store.db")
@@ -285,7 +294,7 @@ def get_booking_history(req: HistoryRequest):
         patient = patient_res.data[0]
         appt_res = (
             supabase.table("appointments")
-            .select("appointment_no, department, doctor, appointment_date, time_slot, created_at")
+            .select("appointment_no, department, doctor, appointment_date, time_slot, status, created_at")
             .eq("patient_id", patient["id"])
             .order("created_at", desc=True)
             .execute()
@@ -298,6 +307,7 @@ def get_booking_history(req: HistoryRequest):
                 "department": a["department"],
                 "doctor": a["doctor"],
                 "slot": f"{a['appointment_date']} {a['time_slot']}",
+                "status": a.get("status", "confirmed"),
                 "created_at": a["created_at"],
             }
             for a in appt_res.data
@@ -306,6 +316,91 @@ def get_booking_history(req: HistoryRequest):
         return {"status": "success", "data": history}
     except Exception as e:
         return {"status": "error", "message": f"查詢失敗: {str(e)}"}
+
+@app.post("/api/booking/cancel")
+def cancel_booking(req: CancelRequest):
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+
+    try:
+        id_number = req.id_number.strip().upper()
+        patient_res = supabase.table("patients").select("id").eq("id_number", id_number).execute()
+        if not patient_res.data:
+            return {"status": "error", "message": "查無此身分證字號的掛號紀錄。"}
+        patient_id = patient_res.data[0]["id"]
+
+        appt_res = (
+            supabase.table("appointments")
+            .select("id, status, doctor, appointment_date, time_slot")
+            .eq("patient_id", patient_id)
+            .eq("appointment_no", req.appointment_no)
+            .execute()
+        )
+        if not appt_res.data:
+            return {"status": "error", "message": "查無此掛號紀錄，或身分證字號不符。"}
+        appt = appt_res.data[0]
+        if appt["status"] == "cancelled":
+            return {"status": "error", "message": "此掛號已經是取消狀態。"}
+
+        supabase.table("appointments").update({"status": "cancelled"}).eq("id", appt["id"]).execute()
+        return {"status": "success", "message": f"已為您取消 {appt['appointment_date']} {appt['time_slot']} {appt['doctor']} 的掛號。"}
+    except Exception as e:
+        return {"status": "error", "message": f"取消掛號失敗: {str(e)}"}
+
+@app.post("/api/booking/reschedule")
+def reschedule_booking(req: RescheduleRequest):
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+
+    try:
+        id_number = req.id_number.strip().upper()
+        patient_res = supabase.table("patients").select("id").eq("id_number", id_number).execute()
+        if not patient_res.data:
+            return {"status": "error", "message": "查無此身分證字號的掛號紀錄。"}
+        patient_id = patient_res.data[0]["id"]
+
+        appt_res = (
+            supabase.table("appointments")
+            .select("id, status, doctor")
+            .eq("patient_id", patient_id)
+            .eq("appointment_no", req.appointment_no)
+            .execute()
+        )
+        if not appt_res.data:
+            return {"status": "error", "message": "查無此掛號紀錄，或身分證字號不符。"}
+        appt = appt_res.data[0]
+        if appt["status"] != "confirmed":
+            return {"status": "error", "message": "此掛號目前狀態無法改期。"}
+
+        doctor = appt["doctor"]
+        allowed_slots = DOCTOR_SCHEDULES.get(doctor, DEFAULT_SLOTS)
+        is_valid_slot = any(valid_time in req.new_slot for valid_time in allowed_slots)
+        if not is_valid_slot:
+            return {"status": "error", "message": f"驗證失敗：{doctor} 在該時段沒有看診！"}
+
+        new_date, new_time_slot = (req.new_slot.split(" ", 1) + [""])[:2]
+        new_time_slot = new_time_slot or req.new_slot
+
+        existing = (
+            supabase.table("appointments")
+            .select("id", count="exact")
+            .eq("doctor", doctor)
+            .eq("appointment_date", new_date)
+            .eq("time_slot", new_time_slot)
+            .eq("status", "confirmed")
+            .execute()
+        )
+        if (existing.count or 0) >= MAX_PATIENTS_PER_SLOT:
+            return {"status": "error", "message": f"{doctor} 在 {new_date} {new_time_slot} 已額滿，請選擇其他時段。"}
+
+        supabase.table("appointments").update({
+            "appointment_date": new_date,
+            "time_slot": new_time_slot,
+        }).eq("id", appt["id"]).execute()
+
+        return {"status": "success", "message": f"已為您改期至 {new_date} {new_time_slot}。"}
+    except Exception as e:
+        return {"status": "error", "message": f"改期失敗: {str(e)}"}
 
 # 管理者專用，帶有網頁介面的掛號總覽 API（需登入）
 @app.get("/api/admin/all_bookings", response_class=HTMLResponse)
