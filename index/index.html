@@ -179,7 +179,6 @@
     function App() {
       const [state, setState] = useState(STATES.INIT);
       const [prompt, setPrompt] = useState(INITIAL_PROMPT);
-      const [transcript, setTranscript] = useState([{ role: "assistant", text: INITIAL_PROMPT }]);
       const [text, setText] = useState("");
       const [inputValue, setInputValue] = useState("");
       const [recording, setRecording] = useState(false);
@@ -218,12 +217,7 @@
 
       const recognitionRef = useRef(null);
       const patientInfoRecognitionRef = useRef(null);
-      const transcriptEndRef = useRef(null);
       const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {}, chatHistory: [] });
-
-      useEffect(() => {
-        transcriptEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-      }, [transcript]);
 
       useEffect(() => {
         latestRef.current = { state, bodyPart, qaStep, answers, chatHistory };
@@ -243,18 +237,7 @@
         }
       }, [state, result]);
 
-      function logAssistant(msg) {
-        if (!msg) return;
-        setTranscript((prev) => [...prev, { role: "assistant", text: msg }]);
-      }
-
-      function logUser(msg) {
-        if (!msg) return;
-        setTranscript((prev) => [...prev, { role: "user", text: msg }]);
-      }
-
       function speak(message) {
-        logAssistant(message);
         if (!window.speechSynthesis) return;
         const utterance = new SpeechSynthesisUtterance(message);
         utterance.lang = "zh-TW";
@@ -316,7 +299,6 @@
         rec.onresult = (e) => {
           const transcript = e.results[0][0].transcript;
           setLastPatientVoiceTranscript(transcript);
-          logUser(transcript);
           const parsed = parsePatientInfoFromSpeech(transcript);
           setPatientInfo((prev) => ({
             ...prev,
@@ -353,7 +335,6 @@
         const trimmed = inputValue.trim();
         if (!trimmed) return;
         setLastInputEcho(trimmed);
-        logUser(trimmed);
         setText(trimmed);
         setInputValue("");
       }
@@ -362,14 +343,8 @@
         const v = (value || "").trim();
         if (!v) return;
         setLastInputEcho(v);
-        logUser(v);
         setText(v);
         setInputValue("");
-      }
-
-      function selectBodyPartSymptom(symptomText) {
-        logUser(symptomText);
-        analyzeSymptom(symptomText);
       }
 
       function detectPart(content) {
@@ -518,7 +493,6 @@
       function resetAll() {
         setState(STATES.INIT);
         setPrompt(INITIAL_PROMPT);
-        setTranscript([{ role: "assistant", text: INITIAL_PROMPT }]);
         setText(""); setInputValue(""); setRecording(false); setLastInputEcho("");
         setBodyPart(""); setQaStep(0); setAnswers({}); setResult([]); setAlertMessage("");
         setIsDirectBooking(false);
@@ -532,7 +506,6 @@
       }
 
       function startDirectBooking() {
-        logUser("⏩ 略過問診，直接選次專科掛號");
         setIsDirectBooking(true);
         setPrompt("請填寫掛號基本資料以利直接預約骨科門診");
         speak("已為您切換至直接掛號流程，請輸入您的基本資料");
@@ -592,7 +565,6 @@
           const emergency = checkEmergency(bp, newAnswers);
           if (emergency) {
             setAlertMessage(emergency); setState(STATES.ALERT);
-            logAssistant(emergency);
             setPrompt("系統偵測到較危急症狀"); speak("系統偵測到較危急症狀，請盡快就醫"); return;
           }
           const questions = symptomDB[bp]?.questions || [];
@@ -731,31 +703,31 @@
           <div className="body-diagram-wrap">
             <svg className="body-diagram" viewBox="0 0 220 420" role="img" aria-label="骨科部位選擇圖">
               <circle cx="110" cy="34" r="24" style={{ fill: "#eef2ff", stroke: "#c7d2fe", strokeWidth: 2 }} pointerEvents="none" />
-              <rect x="98" y="54" width="24" height="20" rx="8" className={`part ${bodyPart === "頸椎" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("脖子不舒服")} tabIndex="0" role="button" aria-label="頸椎" />
-              <circle cx="66" cy="92" r="16" className={`part ${bodyPart === "肩關節" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("肩膀不舒服")} tabIndex="0" role="button" aria-label="肩關節" />
-              <circle cx="154" cy="92" r="16" className={`part ${bodyPart === "肩關節" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("肩膀不舒服")} tabIndex="0" role="button" aria-label="肩關節" />
-              <rect x="80" y="112" width="60" height="92" rx="20" className={`part ${bodyPart === "腰椎" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("腰部不舒服")} tabIndex="0" role="button" aria-label="腰椎" />
-              <rect x="38" y="98" width="24" height="112" rx="12" className={`part ${bodyPart === "肘腕" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("手肘或手腕不舒服")} tabIndex="0" role="button" aria-label="肘腕" />
-              <rect x="158" y="98" width="24" height="112" rx="12" className={`part ${bodyPart === "肘腕" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("手肘或手腕不舒服")} tabIndex="0" role="button" aria-label="肘腕" />
-              <rect x="82" y="206" width="56" height="30" rx="14" className={`part ${bodyPart === "髖關節" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("髖部不舒服")} tabIndex="0" role="button" aria-label="髖關節" />
+              <rect x="98" y="54" width="24" height="20" rx="8" className={`part ${bodyPart === "頸椎" ? "selected" : ""}`} onClick={() => analyzeSymptom("脖子不舒服")} tabIndex="0" role="button" aria-label="頸椎" />
+              <circle cx="66" cy="92" r="16" className={`part ${bodyPart === "肩關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("肩膀不舒服")} tabIndex="0" role="button" aria-label="肩關節" />
+              <circle cx="154" cy="92" r="16" className={`part ${bodyPart === "肩關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("肩膀不舒服")} tabIndex="0" role="button" aria-label="肩關節" />
+              <rect x="80" y="112" width="60" height="92" rx="20" className={`part ${bodyPart === "腰椎" ? "selected" : ""}`} onClick={() => analyzeSymptom("腰部不舒服")} tabIndex="0" role="button" aria-label="腰椎" />
+              <rect x="38" y="98" width="24" height="112" rx="12" className={`part ${bodyPart === "肘腕" ? "selected" : ""}`} onClick={() => analyzeSymptom("手肘或手腕不舒服")} tabIndex="0" role="button" aria-label="肘腕" />
+              <rect x="158" y="98" width="24" height="112" rx="12" className={`part ${bodyPart === "肘腕" ? "selected" : ""}`} onClick={() => analyzeSymptom("手肘或手腕不舒服")} tabIndex="0" role="button" aria-label="肘腕" />
+              <rect x="82" y="206" width="56" height="30" rx="14" className={`part ${bodyPart === "髖關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("髖部不舒服")} tabIndex="0" role="button" aria-label="髖關節" />
               <rect x="86" y="236" width="20" height="64" rx="10" style={{ fill: "#eef2ff", stroke: "#c7d2fe", strokeWidth: 2 }} pointerEvents="none" />
               <rect x="114" y="236" width="20" height="64" rx="10" style={{ fill: "#eef2ff", stroke: "#c7d2fe", strokeWidth: 2 }} pointerEvents="none" />
-              <circle cx="96" cy="304" r="15" className={`part ${bodyPart === "膝關節" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("膝蓋不舒服")} tabIndex="0" role="button" aria-label="膝關節" />
-              <circle cx="124" cy="304" r="15" className={`part ${bodyPart === "膝關節" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("膝蓋不舒服")} tabIndex="0" role="button" aria-label="膝關節" />
+              <circle cx="96" cy="304" r="15" className={`part ${bodyPart === "膝關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("膝蓋不舒服")} tabIndex="0" role="button" aria-label="膝關節" />
+              <circle cx="124" cy="304" r="15" className={`part ${bodyPart === "膝關節" ? "selected" : ""}`} onClick={() => analyzeSymptom("膝蓋不舒服")} tabIndex="0" role="button" aria-label="膝關節" />
               <rect x="86" y="316" width="20" height="56" rx="10" style={{ fill: "#eef2ff", stroke: "#c7d2fe", strokeWidth: 2 }} pointerEvents="none" />
               <rect x="114" y="316" width="20" height="56" rx="10" style={{ fill: "#eef2ff", stroke: "#c7d2fe", strokeWidth: 2 }} pointerEvents="none" />
-              <circle cx="96" cy="386" r="14" className={`part ${bodyPart === "足踝" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("腳踝或足部不舒服")} tabIndex="0" role="button" aria-label="足踝" />
-              <circle cx="124" cy="386" r="14" className={`part ${bodyPart === "足踝" ? "selected" : ""}`} onClick={() => selectBodyPartSymptom("腳踝或足部不舒服")} tabIndex="0" role="button" aria-label="足踝" />
+              <circle cx="96" cy="386" r="14" className={`part ${bodyPart === "足踝" ? "selected" : ""}`} onClick={() => analyzeSymptom("腳踝或足部不舒服")} tabIndex="0" role="button" aria-label="足踝" />
+              <circle cx="124" cy="386" r="14" className={`part ${bodyPart === "足踝" ? "selected" : ""}`} onClick={() => analyzeSymptom("腳踝或足部不舒服")} tabIndex="0" role="button" aria-label="足踝" />
             </svg>
             <div className="body-legend">
-              <button type="button" className={`chip ${bodyPart === "頸椎" ? "active" : ""}`} onClick={() => selectBodyPartSymptom("脖子痛")}>頸椎</button>
-              <button type="button" className={`chip ${bodyPart === "肩關節" ? "active" : ""}`} onClick={() => selectBodyPartSymptom("肩膀痛")}>肩關節</button>
-              <button type="button" className={`chip ${bodyPart === "腰椎" ? "active" : ""}`} onClick={() => selectBodyPartSymptom("腰痛")}>腰椎</button>
-              <button type="button" className={`chip ${bodyPart === "肘腕" ? "active" : ""}`} onClick={() => selectBodyPartSymptom("手肘或手腕痛")}>肘腕</button>
-              <button type="button" className={`chip ${bodyPart === "髖關節" ? "active" : ""}`} onClick={() => selectBodyPartSymptom("髖部痛")}>髖關節</button>
-              <button type="button" className={`chip ${bodyPart === "膝關節" ? "active" : ""}`} onClick={() => selectBodyPartSymptom("膝蓋痛")}>膝關節</button>
-              <button type="button" className={`chip ${bodyPart === "足踝" ? "active" : ""}`} onClick={() => selectBodyPartSymptom("腳踝痛")}>足踝</button>
-              <button type="button" className={`chip ${bodyPart === "外傷" ? "active" : ""}`} onClick={() => selectBodyPartSymptom("跌倒外傷")}>外傷／骨折</button>
+              <button type="button" className={`chip ${bodyPart === "頸椎" ? "active" : ""}`} onClick={() => analyzeSymptom("脖子痛")}>頸椎</button>
+              <button type="button" className={`chip ${bodyPart === "肩關節" ? "active" : ""}`} onClick={() => analyzeSymptom("肩膀痛")}>肩關節</button>
+              <button type="button" className={`chip ${bodyPart === "腰椎" ? "active" : ""}`} onClick={() => analyzeSymptom("腰痛")}>腰椎</button>
+              <button type="button" className={`chip ${bodyPart === "肘腕" ? "active" : ""}`} onClick={() => analyzeSymptom("手肘或手腕痛")}>肘腕</button>
+              <button type="button" className={`chip ${bodyPart === "髖關節" ? "active" : ""}`} onClick={() => analyzeSymptom("髖部痛")}>髖關節</button>
+              <button type="button" className={`chip ${bodyPart === "膝關節" ? "active" : ""}`} onClick={() => analyzeSymptom("膝蓋痛")}>膝關節</button>
+              <button type="button" className={`chip ${bodyPart === "足踝" ? "active" : ""}`} onClick={() => analyzeSymptom("腳踝痛")}>足踝</button>
+              <button type="button" className={`chip ${bodyPart === "外傷" ? "active" : ""}`} onClick={() => analyzeSymptom("跌倒外傷")}>外傷／骨折</button>
             </div>
           </div>
         );
@@ -985,35 +957,6 @@
         );
       }
 
-      function renderAssistantChat() {
-        return (
-          <div className="assistant-chat">
-            <div className="assistant-chat-header">
-              <span className="assistant-chat-avatar">🤖</span>
-              <div>
-                <div className="assistant-chat-title">AI 掛號助理</div>
-                <div className="assistant-chat-subtitle">正在陪您完成掛號流程</div>
-              </div>
-            </div>
-            <div className="assistant-chat-scroll">
-              {transcript.map((turn, idx) => (
-                <div key={idx} className={`chat-bubble-row ${turn.role}`}>
-                  {turn.role === "assistant" ? <span className="chat-avatar">🦴</span> : null}
-                  <div className={`chat-bubble ${turn.role}`}>{turn.text}</div>
-                </div>
-              ))}
-              {ragLoading ? (
-                <div className="chat-bubble-row assistant">
-                  <span className="chat-avatar">🦴</span>
-                  <div className="chat-bubble assistant chat-typing">AI 正在分析中…</div>
-                </div>
-              ) : null}
-              <div ref={transcriptEndRef} />
-            </div>
-          </div>
-        );
-      }
-
       function renderContent() {
         if (state === STATES.INIT) {
           return (
@@ -1037,7 +980,7 @@
                 {renderBodyDiagram()}
               </div>
               <div style={{ marginTop: "14px" }}>
-                <button type="button" className="secondary-btn" onClick={() => selectBodyPartSymptom("症狀不明確")}>無法確定不適部位</button>
+                <button type="button" className="secondary-btn" onClick={() => analyzeSymptom("症狀不明確")}>無法確定不適部位</button>
               </div>
               <div className="link-row">
                 <button type="button" className="link-btn" onClick={startDirectBooking}>⏩ 直接選次專科掛號</button>
@@ -1209,7 +1152,6 @@
               <p className="prompt">{prompt}</p>
             </div>
           </div>
-          {renderAssistantChat()}
           {renderContent()}
           <div className="footer-note">
             本介面為前端示意版，非醫療診斷；若有肢體劇痛、明顯變形、骨頭外露、下肢麻木無力或大小便失禁等急症，請立即就醫或撥打 119。
