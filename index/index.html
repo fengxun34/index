@@ -130,22 +130,6 @@
       return ASR_CORRECTIONS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), text);
     }
 
-    async function callLobsterBackend(userText, currentState, history) {
-      const gasUrl = "https://script.google.com/macros/s/AKfycbyim9_kVincHBae-Xf7In47jZwMyZmoChXH0EqMs6qnaVO-p6cRPjnp7Q18mYoeQk6qPg/exec";
-      try {
-        const res = await fetch(gasUrl, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({ message: userText, state: currentState, history: history })
-        });
-        const data = await res.json();
-        return data;
-      } catch (e) {
-        console.error("後端連線失敗", e);
-        return null;
-      }
-    }
-
     function parsePatientInfoFromSpeech(raw) {
       const t = normalizeSpeechText(raw);
       const out = { name: "", idNumber: "", birth: "", phone: "" };
@@ -188,7 +172,6 @@
       const [answers, setAnswers] = useState({});
       const [result, setResult] = useState([]);
       const [alertMessage, setAlertMessage] = useState("");
-      const [chatHistory, setChatHistory] = useState([]);
 
       const [isDirectBooking, setIsDirectBooking] = useState(false);
 
@@ -221,11 +204,11 @@
 
       const recognitionRef = useRef(null);
       const patientInfoRecognitionRef = useRef(null);
-      const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {}, chatHistory: [] });
+      const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {} });
 
       useEffect(() => {
-        latestRef.current = { state, bodyPart, qaStep, answers, chatHistory };
-      }, [state, bodyPart, qaStep, answers, chatHistory]);
+        latestRef.current = { state, bodyPart, qaStep, answers };
+      }, [state, bodyPart, qaStep, answers]);
 
       useEffect(() => {
         if (state === STATES.RESULT && result.length > 0) {
@@ -529,7 +512,7 @@
         setShowBookingEdit(false); setIsSubmittingBooking(false);
         setRecordingPatientInfo(false); setPatientVoiceNeedsReview(false);
         setLastPatientVoiceTranscript(""); setRagLoading(false); setRagError("");
-        setRagAnswer(""); setRagChunks([]); setChatHistory([]);
+        setRagAnswer(""); setRagChunks([]);
         setSearchId(""); setHistoryList(null);
       }
 
@@ -540,38 +523,12 @@
         setState(STATES.PATIENT_INFO);
       }
 
-      async function handleIncomingText(rawText) {
+      function handleIncomingText(rawText) {
         const incoming = (rawText || "").trim();
         if (!incoming) return;
         setInputValue("");
         const latest = latestRef.current;
-        const { state: s, bodyPart: bp, qaStep: step, answers: ans, chatHistory: hist } = latest;
-        const updatedHistoryWithUser = [...hist, { role: "user", content: incoming }];
-        setChatHistory(updatedHistoryWithUser);
-
-        const aiResponse = await callLobsterBackend(incoming, latest.state, updatedHistoryWithUser);
-        if (aiResponse) {
-          setChatHistory(prevHistory => [...prevHistory, { role: "assistant", content: aiResponse.reply }]);
-          setPrompt(aiResponse.reply); speak(aiResponse.reply);
-          if (aiResponse.status === "error") return;
-          if (aiResponse.action === "GO_TO_QA") {
-            if (aiResponse.bodyPart) setBodyPart(aiResponse.bodyPart);
-            setState(STATES.QA); return;
-          }
-          if (aiResponse.action === "SHOW_RESULT") {
-            if (Array.isArray(aiResponse.recommendedDepts)) { setResult(aiResponse.recommendedDepts); }
-            else if (aiResponse.detectedDept) { setResult([[aiResponse.detectedDept, 80]]); }
-            setState(STATES.RESULT);
-            const rawTextArray = [incoming, aiResponse.reply || "", aiResponse.detectedDept || "", ...(Array.isArray(aiResponse.recommendedDepts) ? aiResponse.recommendedDepts.map(d => d[0]) : [])].filter(Boolean).join(" ");
-            const cleanRagQuestion = extractKeySymptoms(rawTextArray) || incoming;
-            callRAG(cleanRagQuestion, { recommended_department: Array.isArray(aiResponse.recommendedDepts) ? aiResponse.recommendedDepts[0]?.[0] : aiResponse.detectedDept || "脊椎外科" });
-            return;
-          }
-          if (aiResponse.action === "EMERGENCY") {
-            setAlertMessage(aiResponse.reply); setState(STATES.ALERT); return;
-          }
-          return;
-        }
+        const { state: s, bodyPart: bp, qaStep: step, answers: ans } = latest;
 
         if (s === STATES.INIT) {
           const doctorMatch = detectDoctorMention(incoming);
