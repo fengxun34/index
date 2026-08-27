@@ -8,13 +8,27 @@
 （跟 app.py 用的是同一組）。
 """
 
+import hashlib
 import os
+import secrets
 import sys
 
 from dotenv import load_dotenv
 from supabase import create_client
 
 load_dotenv()
+
+PBKDF2_ITERATIONS = 260_000
+
+
+def hash_password(password: str) -> str:
+    """雜湊密碼，回傳可直接存進 admin_users.password 欄位的字串。
+
+    格式：pbkdf2_sha256$<迭代次數>$<salt(hex)>$<hash(hex)>
+    """
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS)
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}"
 
 
 def main():
@@ -33,11 +47,11 @@ def main():
     supabase = create_client(supabase_url, supabase_key)
 
     supabase.table("admin_users").upsert(
-        {"username": username, "password": password},
+        {"username": username, "password": hash_password(password)},
         on_conflict="username",
     ).execute()
 
-    print(f"✅ 已設定管理員帳號「{username}」的密碼，之後可用這組帳密登入後台掛號總覽頁面。")
+    print(f"✅ 已設定管理員帳號「{username}」的密碼（已雜湊儲存），之後可用這組帳密登入後台掛號總覽頁面。")
 
 
 if __name__ == "__main__":

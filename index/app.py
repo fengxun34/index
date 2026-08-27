@@ -5,7 +5,10 @@ import numpy as np
 import os
 import re
 import secrets
+import hashlib
 import html as html_lib
+from collections import defaultdict
+from datetime import datetime, timedelta
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse  # 讓 API 可以回傳漂亮網頁
@@ -163,7 +166,37 @@ else:
 
 # ===== 後台管理員登入驗證（帳密存在 Supabase 的 admin_users 表）=====
 # 設定/修改密碼請用 set_admin_password.py，不需要手寫 SQL。
+# 密碼以 PBKDF2-SHA256 雜湊存放（格式：pbkdf2_sha256$迭代次數$salt$hash），
+# 資料庫外洩也不會直接曝露原始密碼。
 security = HTTPBasic()
+
+def verify_password(plain_password: str, stored_value: str) -> bool:
+    try:
+        algorithm, iterations, salt_hex, hash_hex = stored_value.split("$")
+        if algorithm != "pbkdf2_sha256":
+            return False
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+    except (ValueError, AttributeError):
+        return False
+
+    actual = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt, int(iterations))
+    return secrets.compare_digest(actual, expected)
+
+# 後台登入失敗次數限制（記憶體內即可，示範用途不需要跨行程共享）：
+# 同一帳號 15 分鐘內失敗滿 5 次就先鎖住，避免密碼被暴力破解。
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_MINUTES = 15
+_failed_login_attempts = defaultdict(list)
+
+def _is_locked_out(username: str) -> bool:
+    window_start = datetime.utcnow() - timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+    recent = [t for t in _failed_login_attempts[username] if t > window_start]
+    _failed_login_attempts[username] = recent
+    return len(recent) >= MAX_LOGIN_ATTEMPTS
+
+def _record_failed_login(username: str):
+    _failed_login_attempts[username].append(datetime.utcnow())
 
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     unauthorized = HTTPException(
@@ -174,12 +207,20 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     if supabase is None:
         raise HTTPException(status_code=503, detail="Supabase 尚未設定")
 
+    if _is_locked_out(credentials.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"登入失敗次數過多，請 {LOGIN_LOCKOUT_MINUTES} 分鐘後再試。",
+        )
+
     res = supabase.table("admin_users").select("password").eq("username", credentials.username).execute()
     if not res.data:
+        _record_failed_login(credentials.username)
         raise unauthorized
 
     stored_password = res.data[0]["password"]
-    if not secrets.compare_digest(credentials.password, stored_password):
+    if not verify_password(credentials.password, stored_password):
+        _record_failed_login(credentials.username)
         raise unauthorized
 
     return credentials.username
