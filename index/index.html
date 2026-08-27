@@ -130,6 +130,32 @@
       return ASR_CORRECTIONS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), text);
     }
 
+    // 外部 Google Apps Script：僅作為背景「補充建議」，不參與問診流程本身，
+    // 也絕不覆蓋本地規則引擎算出的次專科結果（見 handleIncomingText 的說明）。
+    // 加上逾時，避免它拖慢或卡住問診。
+    const GAS_TIMEOUT_MS = 3000;
+
+    async function callLobsterBackend(userText, currentState, history) {
+      const gasUrl = "https://script.google.com/macros/s/AKfycbyim9_kVincHBae-Xf7In47jZwMyZmoChXH0EqMs6qnaVO-p6cRPjnp7Q18mYoeQk6qPg/exec";
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), GAS_TIMEOUT_MS);
+      try {
+        const res = await fetch(gasUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ message: userText, state: currentState, history: history }),
+          signal: controller.signal
+        });
+        const data = await res.json();
+        return data;
+      } catch (e) {
+        console.warn("外部 AI 補充建議取得失敗（不影響問診本身）：", e);
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
     function parsePatientInfoFromSpeech(raw) {
       const t = normalizeSpeechText(raw);
       const out = { name: "", idNumber: "", birth: "", phone: "" };
@@ -172,6 +198,8 @@
       const [answers, setAnswers] = useState({});
       const [result, setResult] = useState([]);
       const [alertMessage, setAlertMessage] = useState("");
+      const [chatHistory, setChatHistory] = useState([]);
+      const [externalHint, setExternalHint] = useState("");
 
       const [isDirectBooking, setIsDirectBooking] = useState(false);
 
@@ -204,11 +232,11 @@
 
       const recognitionRef = useRef(null);
       const patientInfoRecognitionRef = useRef(null);
-      const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {} });
+      const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {}, chatHistory: [] });
 
       useEffect(() => {
-        latestRef.current = { state, bodyPart, qaStep, answers };
-      }, [state, bodyPart, qaStep, answers]);
+        latestRef.current = { state, bodyPart, qaStep, answers, chatHistory };
+      }, [state, bodyPart, qaStep, answers, chatHistory]);
 
       useEffect(() => {
         if (state === STATES.RESULT && result.length > 0) {
@@ -478,6 +506,7 @@
 
       function analyzeSymptom(symptomText) {
         if (!symptomText) return;
+        setExternalHint("");
         if (symptomText === "症狀不明確") {
           setBodyPart("未明"); setQaStep(0); setAnswers({ mainComplaint: symptomText });
           const firstQuestion = symptomDB["未明"].questions[0].q;
@@ -493,6 +522,7 @@
       }
 
       function applyDirectDoctorSelection({ department, doctor }) {
+        setExternalHint("");
         const availableSlots = doctorSchedules[doctor] || timeSlots;
         setResult([[department, 100]]);
         setBooking((prev) => ({ ...prev, department, doctor, slot: availableSlots[0] }));
@@ -512,7 +542,7 @@
         setShowBookingEdit(false); setIsSubmittingBooking(false);
         setRecordingPatientInfo(false); setPatientVoiceNeedsReview(false);
         setLastPatientVoiceTranscript(""); setRagLoading(false); setRagError("");
-        setRagAnswer(""); setRagChunks([]);
+        setRagAnswer(""); setRagChunks([]); setChatHistory([]); setExternalHint("");
         setSearchId(""); setHistoryList(null);
       }
 
@@ -523,12 +553,27 @@
         setState(STATES.PATIENT_INFO);
       }
 
+      // 背景取得外部 AI（Google Apps Script）的補充建議，全程不 await、不阻塞問診，
+      // 也絕不用它的結果去改變 state／department／booking，避免重演之前「蓋掉本地
+      // 正確次專科判斷」跟「拖慢問診」的問題，只拿它的文字當作額外參考顯示。
+      function fetchExternalHint(userText, currentState, hist) {
+        const updatedHistory = [...hist, { role: "user", content: userText }];
+        setChatHistory(updatedHistory);
+        callLobsterBackend(userText, currentState, updatedHistory).then((aiResponse) => {
+          if (!aiResponse || !aiResponse.reply) return;
+          setChatHistory((prev) => [...prev, { role: "assistant", content: aiResponse.reply }]);
+          setExternalHint(aiResponse.reply);
+        });
+      }
+
       function handleIncomingText(rawText) {
         const incoming = (rawText || "").trim();
         if (!incoming) return;
         setInputValue("");
         const latest = latestRef.current;
-        const { state: s, bodyPart: bp, qaStep: step, answers: ans } = latest;
+        const { state: s, bodyPart: bp, qaStep: step, answers: ans, chatHistory: hist } = latest;
+
+        fetchExternalHint(incoming, s, hist);
 
         if (s === STATES.INIT) {
           const doctorMatch = detectDoctorMention(incoming);
@@ -749,6 +794,12 @@
               </div>
             ) : null}
             {!ragLoading && !ragError && !ragAnswer && ragChunks.length === 0 ? (<div className="rag-empty">目前尚未取得檢索結果。</div>) : null}
+            {externalHint ? (
+              <div className="rag-answer-card" style={{ marginTop: '10px', borderStyle: 'dashed' }}>
+                <div className="rag-answer-label">🌐 外部 AI 補充建議（僅供參考，不影響上方分流結果）</div>
+                <p>{externalHint}</p>
+              </div>
+            ) : null}
           </div>
         );
       }
