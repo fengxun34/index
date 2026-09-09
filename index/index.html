@@ -804,6 +804,22 @@
         );
       }
 
+      function renderSymptomInput() {
+        return (
+          <div className="hero-card">
+            <div className="mic-panel">
+              <button type="button" className={`mic-btn ${recording ? "recording" : ""}`} onClick={recording ? stopRecord : startRecord}>{recording ? "停止錄音" : "開始語音"}</button>
+              <p className="helper-text">可直接說：「我肩膀痛」、「我膝蓋腫」；也可以直接說「我要掛高醫師」或「我要掛脊椎外科」跳過問診。</p>
+            </div>
+            {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
+            <div className="input-row">
+              <input className="text-input" value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="請輸入症狀，例如：膝蓋痛、腰痛、肩頸痠痛" onKeyDown={(e) => { if (e.key === "Enter") submitManualInput(); }} />
+              <button type="button" className="mini-btn" onClick={submitManualInput}>送出</button>
+            </div>
+          </div>
+        );
+      }
+
       function renderDefaultInput() {
         return (
           <>
@@ -1111,14 +1127,44 @@
       function renderContent() {
         if (state === STATES.INIT) {
           return (
-            <>
-              <div className="hero-card">
-                <h3 className="section-title">開始骨科智慧問診</h3>
-                <p className="helper-text">可直接說出症狀，或點選下方人體圖快速開始。</p>
-                <div className="body-select-card compact">{renderBodyDiagram()}</div>
+            <div className="hero-card intent-picker">
+              <h3 className="section-title">請問需要什麼服務？</h3>
+              <p className="helper-text">選一項開始，或直接用語音／文字描述症狀也可以。</p>
+              <div className="intent-options">
+                <button type="button" className="intent-btn" onClick={() => {
+                  setPrompt("請選擇不舒服的骨骼關節部位，或直接描述症狀");
+                  speak("請選擇不舒服的骨骼關節部位，或直接描述症狀");
+                  setState(STATES.SELECT_BODY_PART);
+                }}>
+                  <span className="intent-emoji">🩺</span>
+                  <span className="intent-title">不確定看哪科</span>
+                  <span className="intent-desc">用症狀問診，AI 幫你分流次專科</span>
+                </button>
+                <button type="button" className="intent-btn" onClick={startDirectBooking}>
+                  <span className="intent-emoji">🎯</span>
+                  <span className="intent-title">我知道要掛哪科／哪位醫師</span>
+                  <span className="intent-desc">直接選次專科與醫師掛號</span>
+                </button>
+                <button type="button" className="intent-btn" onClick={() => {
+                  setState(STATES.CHECK_HISTORY);
+                  setPrompt("請輸入身分證字號查詢、取消或改期掛號");
+                  speak("請輸入您的身分證字號以查詢、取消或改期掛號");
+                }}>
+                  <span className="intent-emoji">📋</span>
+                  <span className="intent-title">查詢／取消／改期</span>
+                  <span className="intent-desc">管理我已經預約的掛號</span>
+                </button>
               </div>
-              <div style={{ marginTop: "26px" }}>{renderDefaultInput()}</div>
-            </>
+              <div className="intent-voice-hint">
+                <button type="button" className={`mic-btn ${recording ? "recording" : ""}`} onClick={recording ? stopRecord : startRecord}>{recording ? "停止錄音" : "開始語音"}</button>
+                <p className="helper-text">也可以直接說「我肩膀痛」或「我要掛高醫師」，AI 會自動幫你判斷。</p>
+                {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
+                <div className="input-row">
+                  <input className="text-input" value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="或直接輸入症狀／科別／醫師姓名" onKeyDown={(e) => { if (e.key === "Enter") submitManualInput(); }} />
+                  <button type="button" className="mini-btn" onClick={submitManualInput}>送出</button>
+                </div>
+              </div>
+            </div>
           );
         }
 
@@ -1138,7 +1184,7 @@
                 <span className="link-sep">・</span>
                 <button type="button" className="link-btn" onClick={resetAll}>⬅ 回主畫面</button>
               </div>
-              <div style={{ marginTop: "26px" }}>{renderDefaultInput()}</div>
+              <div style={{ marginTop: "26px" }}>{renderSymptomInput()}</div>
             </>
           );
         }
