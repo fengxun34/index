@@ -100,6 +100,48 @@ create trigger trg_patients_updated_at
     for each row
     execute function set_updated_at();
 
+-- ---------- 原子性掛號（避免高併發下容額上限被打破，詳見 sql/003_atomic_slot_capacity.sql） ----------
+create or replace function book_appointment_slot(
+    p_patient_id uuid,
+    p_department text,
+    p_doctor text,
+    p_appointment_date date,
+    p_time_slot text,
+    p_max_per_slot integer
+)
+returns appointments
+language plpgsql
+as $$
+declare
+    v_lock_key bigint;
+    v_current_count integer;
+    v_new_row appointments;
+begin
+    v_lock_key := hashtextextended(p_doctor || '|' || p_appointment_date::text || '|' || p_time_slot, 0);
+    perform pg_advisory_xact_lock(v_lock_key);
+
+    select count(*) into v_current_count
+    from appointments
+    where doctor = p_doctor
+      and appointment_date = p_appointment_date
+      and time_slot = p_time_slot
+      and status = 'confirmed';
+
+    if v_current_count >= p_max_per_slot then
+        raise exception 'SLOT_FULL' using errcode = 'P0001';
+    end if;
+
+    insert into appointments (patient_id, department, doctor, appointment_date, time_slot)
+    values (p_patient_id, p_department, p_doctor, p_appointment_date, p_time_slot)
+    returning * into v_new_row;
+
+    return v_new_row;
+end;
+$$;
+
+comment on function book_appointment_slot is
+    '原子性地檢查容額並新增掛號，避免高併發下容額上限被打破';
+
 -- ---------- 設定後台管理員帳號 ----------
 -- 執行完這份 schema.sql 後，不需要在這裡手動寫 SQL 設定密碼，
 -- 改用專案根目錄的 set_admin_password.py，例如：

@@ -284,26 +284,26 @@ def confirm_booking(req: BookingRequest):
         appointment_date, time_slot = (req.slot.split(" ", 1) + [""])[:2]
         time_slot = time_slot or req.slot
 
-        existing = (
-            supabase.table("appointments")
-            .select("id", count="exact")
-            .eq("doctor", req.doctor)
-            .eq("appointment_date", appointment_date)
-            .eq("time_slot", time_slot)
-            .eq("status", "confirmed")
-            .execute()
-        )
-        if (existing.count or 0) >= MAX_PATIENTS_PER_SLOT:
-            return {"status": "error", "message": f"{req.doctor} 在 {appointment_date} {time_slot} 已額滿，請選擇其他時段。"}
+        # 用資料庫端的原子操作（advisory lock）檢查容額並新增掛號，避免高併發下
+        # 「先查詢再新增」這兩步不同交易，導致容額上限被打破（見 sql/003_atomic_slot_capacity.sql）
+        try:
+            appt_res = supabase.rpc("book_appointment_slot", {
+                "p_patient_id": patient_id,
+                "p_department": req.department,
+                "p_doctor": req.doctor,
+                "p_appointment_date": appointment_date,
+                "p_time_slot": time_slot,
+                "p_max_per_slot": MAX_PATIENTS_PER_SLOT,
+            }).execute()
+        except Exception as e:
+            if "SLOT_FULL" in str(e):
+                return {"status": "error", "message": f"{req.doctor} 在 {appointment_date} {time_slot} 已額滿，請選擇其他時段。"}
+            raise
 
-        appt_res = supabase.table("appointments").insert({
-            "patient_id": patient_id,
-            "department": req.department,
-            "doctor": req.doctor,
-            "appointment_date": appointment_date,
-            "time_slot": time_slot,
-        }).execute()
-        appointment_id = appt_res.data[0]["id"] if appt_res.data else None
+        appt_data = appt_res.data
+        if isinstance(appt_data, list):
+            appt_data = appt_data[0] if appt_data else None
+        appointment_id = appt_data.get("id") if appt_data else None
 
         # 若有 AI 問診過程（略過問診直接掛號時不會有），一併存下來供醫師看診前參考
         if req.body_part:
