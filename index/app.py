@@ -452,11 +452,20 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
     try:
         res = (
             supabase.table("appointments")
-            .select("id, appointment_no, department, doctor, appointment_date, time_slot, created_at, patients(patient_no, name, id_number)")
+            .select("id, appointment_no, department, doctor, appointment_date, time_slot, status, created_at, patients(patient_no, name, id_number)")
             .order("created_at", desc=True)
             .execute()
         )
         rows = res.data or []
+
+        # 累計看診次數：以身分證字號為準，取消的掛號不算一次看診
+        visit_counts: Dict[str, int] = {}
+        for r in rows:
+            if r.get("status") == "cancelled":
+                continue
+            id_number = (r.get("patients") or {}).get("id_number")
+            if id_number:
+                visit_counts[id_number] = visit_counts.get(id_number, 0) + 1
 
         triage_res = (
             supabase.table("triage_records")
@@ -474,6 +483,13 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
         for r in rows:
             patient = r.get("patients") or {}
             triage = triage_by_appointment.get(r.get("id"))
+            is_cancelled = r.get("status") == "cancelled"
+            status_html = (
+                '<span style="color:#c0392b;font-weight:600;">已取消</span>'
+                if is_cancelled
+                else '<span style="color:#27ae60;font-weight:600;">正常</span>'
+            )
+            visit_count = visit_counts.get(patient.get("id_number"), 0)
 
             if triage:
                 qa_answers = triage.get("qa_answers") or {}
@@ -501,6 +517,7 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
                 f"<td>{esc(patient.get('name'))}</td><td>{esc(patient.get('id_number'))}</td>"
                 f"<td>{esc(r['department'])}</td><td>{esc(r['doctor'])}</td>"
                 f"<td>{esc(r['appointment_date'])} {esc(r['time_slot'])}</td><td>{esc(r['created_at'])}</td>"
+                f"<td>{status_html}</td><td style=\"text-align:center;\">{visit_count}</td>"
                 f"<td>{triage_html}</td></tr>"
             )
 
@@ -546,6 +563,8 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
                             <th>看診醫師</th>
                             <th>預約時段</th>
                             <th>掛號建立時間</th>
+                            <th>狀態</th>
+                            <th>累計看診次數</th>
                             <th>AI 問診紀錄</th>
                         </tr>
                     </thead>
