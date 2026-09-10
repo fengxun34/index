@@ -654,6 +654,32 @@ select:focus {
   color: rgba(127, 29, 29, 0.85) !important;
 }
 
+.notice-box {
+  padding: 22px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  border-color: rgba(245, 158, 11, 0.32);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(255, 255, 255, 0.98));
+}
+
+.notice-box h3 {
+  color: #b45309;
+  font-size: 22px;
+  margin: 0 0 8px;
+}
+
+.notice-box p {
+  margin: 0;
+  font-size: 16px;
+  color: #78350f;
+  line-height: 1.8;
+}
+
+.notice-box .alert-disclaimer {
+  color: rgba(120, 53, 15, 0.8) !important;
+}
+
 .success {
   display: inline-flex;
   align-items: center;

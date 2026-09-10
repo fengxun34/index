@@ -24,8 +24,21 @@
       RESULT: "RESULT",
       PATIENT_INFO: "PATIENT_INFO",
       COMPLETE: "COMPLETE",
-      CHECK_HISTORY: "CHECK_HISTORY"
+      CHECK_HISTORY: "CHECK_HISTORY",
+      NON_ORTHO_SUGGESTION: "NON_ORTHO_SUGGESTION"
     };
+
+    // 非骨科症狀關鍵字：偵測到這些且沒有合併骨骼關節相關描述時，
+    // 提醒使用者可能掛錯科，而不是硬塞進骨科 7 個次專科裡
+    const NON_ORTHO_SUGGESTIONS = [
+      { keywords: ["頭痛", "頭暈", "偏頭痛", "中風", "半邊手腳無力"], dept: "神經內科" },
+      { keywords: ["胸悶", "心悸", "胸痛", "心臟不舒服"], dept: "心臟內科" },
+      { keywords: ["肚子痛", "腹痛", "拉肚子", "腹瀉", "嘔吐", "噁心想吐"], dept: "腸胃內科" },
+      { keywords: ["發燒", "畏寒", "感冒", "喉嚨痛", "咳嗽", "流鼻水"], dept: "家醫科／內科" },
+      { keywords: ["皮膚癢", "紅疹", "起疹子", "濕疹", "蕁麻疹"], dept: "皮膚科" },
+      { keywords: ["視力模糊", "眼睛痛", "看不清楚", "眼睛紅"], dept: "眼科" },
+      { keywords: ["牙齒痛", "蛀牙", "牙齦腫"], dept: "牙科" }
+    ];
 
     // 骨科次專科（依評審意見，POC 範圍聚焦骨科，其他科別留待後續擴增）
     const doctorsByDept = {
@@ -200,6 +213,8 @@
       const [answers, setAnswers] = useState({});
       const [result, setResult] = useState([]);
       const [alertMessage, setAlertMessage] = useState("");
+      const [nonOrthoDept, setNonOrthoDept] = useState("");
+      const [nonOrthoText, setNonOrthoText] = useState("");
       const [chatHistory, setChatHistory] = useState([]);
       const [externalHint, setExternalHint] = useState("");
 
@@ -432,6 +447,17 @@
         return null;
       }
 
+      // 判斷描述是否聽起來不是骨科問題。若同時提到骨骼關節相關字眼，
+      // 優先照骨科流程走（避免漏掉合併症狀，例如關節腫痛合併發燒）。
+      function detectNonOrthoConcern(content) {
+        const t = (content || "").trim();
+        if (!t || hasDirectSymptomHint(t)) return null;
+        for (const entry of NON_ORTHO_SUGGESTIONS) {
+          if (entry.keywords.some((k) => t.includes(k))) return entry.dept;
+        }
+        return null;
+      }
+
       function checkEmergency(part, ans) {
         const joined = Object.values(ans).join(" ");
         if ((part === "頸椎" || part === "腰椎") && /(大小便失禁|下肢無力癱瘓|馬鞍區麻木|意識不清)/.test(joined)) {
@@ -545,11 +571,20 @@
         setState(STATES.RESULT);
       }
 
+      function showNonOrthoSuggestion(dept, originalText) {
+        setNonOrthoDept(dept);
+        setNonOrthoText(originalText);
+        const msg = `您描述的症狀聽起來可能不是骨科問題，建議優先考慮掛「${dept}」門診評估。`;
+        setPrompt(msg); speak(msg);
+        setState(STATES.NON_ORTHO_SUGGESTION);
+      }
+
       function resetAll() {
         setState(STATES.INIT);
         setPrompt(INITIAL_PROMPT);
         setText(""); setInputValue(""); setRecording(false); setLastInputEcho(""); setVoiceFailCount(0);
         setBodyPart(""); setQaStep(0); setAnswers({}); setResult([]); setAlertMessage("");
+        setNonOrthoDept(""); setNonOrthoText("");
         setIsDirectBooking(false);
         setPatientInfo({ name: "", idNumber: "", birth: "", phone: "" });
         setBooking({ department: "脊椎外科", doctor: "高醫師", date: new Date().toISOString().split('T')[0], slot: timeSlots[0] });
@@ -592,6 +627,8 @@
         if (s === STATES.INIT) {
           const doctorMatch = detectDoctorMention(incoming);
           if (doctorMatch) { applyDirectDoctorSelection(doctorMatch); return; }
+          const nonOrthoDeptMatch = detectNonOrthoConcern(incoming);
+          if (nonOrthoDeptMatch) { showNonOrthoSuggestion(nonOrthoDeptMatch, incoming); return; }
           if (incoming.includes("掛號") || incoming.length > 0) {
             if (hasDirectSymptomHint(incoming)) { analyzeSymptom(incoming); }
             else {
@@ -604,6 +641,8 @@
         if (s === STATES.SELECT_BODY_PART) {
           const doctorMatch = detectDoctorMention(incoming);
           if (doctorMatch) { applyDirectDoctorSelection(doctorMatch); return; }
+          const nonOrthoDeptMatch = detectNonOrthoConcern(incoming);
+          if (nonOrthoDeptMatch) { showNonOrthoSuggestion(nonOrthoDeptMatch, incoming); return; }
           analyzeSymptom(incoming); return;
         }
 
@@ -1241,6 +1280,22 @@
                 <p className="alert-disclaimer">本系統僅供骨科初步分流，若症狀持續惡化請立即就醫。</p>
               </div>
               <button type="button" className="secondary-btn" onClick={resetAll}>重新開始</button>
+            </>
+          );
+        }
+
+        if (state === STATES.NON_ORTHO_SUGGESTION) {
+          return (
+            <>
+              <div className="notice-box">
+                <h3>💡 溫馨提醒</h3>
+                <p>您描述的「{nonOrthoText}」聽起來可能不屬於骨科範圍，建議您優先考慮掛「<strong>{nonOrthoDept}</strong>」門診評估。</p>
+                <p className="alert-disclaimer">本系統僅提供骨科掛號服務，非醫療診斷；若同時有骨骼關節問題，歡迎繼續使用本系統掛號。</p>
+              </div>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+                <button type="button" className="secondary-btn" style={{ margin: 0, flex: 1 }} onClick={resetAll}>返回主畫面</button>
+                <button type="button" className="btn" style={{ margin: 0, flex: 1 }} onClick={() => analyzeSymptom(nonOrthoText)}>我還是要繼續骨科問診</button>
+              </div>
             </>
           );
         }

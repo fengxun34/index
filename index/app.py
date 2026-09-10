@@ -498,9 +498,15 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
                     for k, v in qa_answers.items()
                     if k != "mainComplaint"
                 )
+                # 醫師看診前不用點開就能先掃過重點：部位＋主訴的一行摘要，
+                # 完整問答與 AI 建議還是收在展開區塊裡，需要細節再點開
+                summary_text = f"{triage.get('body_part') or '未提供部位'}／{triage.get('main_complaint') or '未提供主訴'}"
+                if len(summary_text) > 40:
+                    summary_text = summary_text[:40] + "…"
                 triage_html = f"""
+                    <div class="triage-summary">📋 {esc(summary_text)}</div>
                     <details>
-                        <summary>查看 AI 問診紀錄</summary>
+                        <summary>查看完整 AI 問診紀錄</summary>
                         <div class="triage-detail">
                             <p><strong>部位：</strong>{esc(triage.get('body_part'))}</p>
                             <p><strong>主訴：</strong>{esc(triage.get('main_complaint'))}</p>
@@ -510,7 +516,7 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
                     </details>
                 """
             else:
-                triage_html = "－"
+                triage_html = '<span style="color:#999;">－（略過問診直接掛號）</span>'
 
             tr_html += (
                 f"<tr><td>{esc(r.get('appointment_no'))}</td><td>{esc(patient.get('patient_no'))}</td>"
@@ -544,6 +550,7 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
                 .triage-detail {{ margin-top: 10px; padding: 10px 12px; background: #f4f7fb; border-radius: 8px; }}
                 .triage-detail p {{ margin: 4px 0; }}
                 .triage-detail ul {{ margin: 4px 0; padding-left: 18px; }}
+                .triage-summary {{ font-size: 13.5px; color: #444; margin-bottom: 6px; font-weight: 600; }}
             </style>
         </head>
         <body>
