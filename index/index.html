@@ -25,7 +25,10 @@
       PATIENT_INFO: "PATIENT_INFO",
       COMPLETE: "COMPLETE",
       CHECK_HISTORY: "CHECK_HISTORY",
-      NON_ORTHO_SUGGESTION: "NON_ORTHO_SUGGESTION"
+      NON_ORTHO_SUGGESTION: "NON_ORTHO_SUGGESTION",
+      XRAY: "XRAY",
+      REMINDERS: "REMINDERS",
+      REHAB: "REHAB"
     };
 
     // 非骨科症狀關鍵字：偵測到這些且沒有合併骨骼關節相關描述時，
@@ -68,6 +71,158 @@
     };
 
     const timeSlots = ["早上 09:00 - 12:00", "下午 03:00 - 05:00", "晚上 06:00 - 09:00"];
+
+    // ===== 復健影片教學：常見骨科居家復健動作 =====
+    // videoUrl 留空時，會顯示「到 YouTube 搜尋示範影片」的連結；
+    // 院方若有自己拍攝或指定的衛教影片，把 YouTube 網址貼到 videoUrl，畫面就會直接嵌入播放。
+    const REHAB_EXERCISES = [
+      { id: "chin-tuck", part: "頸椎", name: "頸部後縮運動（收下巴）", reps: "每次停留 5 秒，10 下為一組，每天 3 組",
+        steps: ["坐直或站直，眼睛平視前方", "下巴水平往後收，像做出「雙下巴」", "感覺後頸伸展，停留 5 秒後放鬆"],
+        caution: "動作要慢，不要低頭或仰頭；若手臂麻木加劇請停止。", videoUrl: "" },
+      { id: "neck-stretch", part: "頸椎", name: "上斜方肌伸展", reps: "每側停留 20–30 秒，重複 3 次",
+        steps: ["坐姿，右手抓住椅子邊緣固定肩膀", "左手輕放頭頂，將頭往左側斜拉", "感覺右側頸肩伸展，換邊重複"],
+        caution: "只做到輕微緊繃感，不要用力拉扯。", videoUrl: "" },
+      { id: "pendulum", part: "肩關節", name: "鐘擺運動", reps: "順、逆時針各 10 圈，每天 3 次",
+        steps: ["健側手扶桌子，身體前彎約 90 度", "患側手臂自然下垂放鬆", "利用身體輕晃帶動手臂小幅度畫圈"],
+        caution: "手臂要放鬆靠擺動帶動，不要主動出力；適合五十肩或術後早期。", videoUrl: "" },
+      { id: "wall-walk", part: "肩關節", name: "爬牆運動", reps: "10 下為一組，每天 2–3 組",
+        steps: ["面對牆壁站立，距離約一個手臂", "手指沿牆面慢慢往上爬到有緊繃感", "停留 5 秒後再慢慢爬下來"],
+        caution: "不要聳肩代償；每天記錄高度，可以看到進步。", videoUrl: "" },
+      { id: "cat-cow", part: "腰椎", name: "貓牛式", reps: "10 下為一組，每天 2 組",
+        steps: ["四足跪姿，手在肩膀正下方、膝蓋在髖部正下方", "吐氣拱背、低頭（貓式）", "吸氣慢慢讓腰下沉、抬頭（牛式）"],
+        caution: "在不痛的範圍內活動，動作配合呼吸放慢。", videoUrl: "" },
+      { id: "bridge", part: "腰椎", name: "橋式", reps: "停留 5 秒，10 下為一組，每天 2–3 組",
+        steps: ["平躺屈膝，雙腳與肩同寬踩地", "收緊臀部與腹部，把臀部抬離地面", "肩膀到膝蓋呈一直線，停留後慢慢放下"],
+        caution: "不要過度挺腰；腰痛加劇時先暫停。", videoUrl: "" },
+      { id: "wrist-extensor", part: "肘腕", name: "手腕伸肌伸展（網球肘）", reps: "停留 20–30 秒，重複 3 次",
+        steps: ["手臂往前伸直，掌心朝下", "另一手將手背往下壓", "感覺前臂外側伸展"],
+        caution: "伸展時不應有刺痛感。", videoUrl: "" },
+      { id: "tendon-glide", part: "肘腕", name: "肌腱滑動運動（腕隧道）", reps: "每個姿勢停 3 秒，5 輪為一組，每天 3 組",
+        steps: ["手指伸直", "彎成勾拳（掌指關節伸直、指節彎曲）", "握拳，再回到手指伸直"],
+        caution: "動作輕柔，麻木明顯加重要回診。", videoUrl: "" },
+      { id: "clamshell", part: "髖關節", name: "蚌殼式", reps: "每側 15 下，每天 2 組",
+        steps: ["側躺，屈髖屈膝，雙腳併攏", "腳跟保持貼合，把上方膝蓋打開", "停 2 秒後慢慢合起"],
+        caution: "骨盆不要往後倒；人工髖關節術後請先詢問醫師可做的角度。", videoUrl: "" },
+      { id: "quad-set", part: "膝關節", name: "股四頭肌等長收縮", reps: "每次用力 5–10 秒，10 下為一組，每天 3 組",
+        steps: ["坐或躺，膝蓋伸直，膝下墊一條毛巾", "大腿前側用力把膝蓋往下壓毛巾", "停留後放鬆"],
+        caution: "膝關節術後或退化性關節炎最基本的運動，不痛就可以做。", videoUrl: "" },
+      { id: "slr", part: "膝關節", name: "直膝抬腿", reps: "10 下為一組，每天 2–3 組",
+        steps: ["平躺，一腳屈膝踩地，另一腳伸直", "伸直腳大腿用力、腳尖朝上", "慢慢抬高約 30 公分，停 5 秒後放下"],
+        caution: "抬起時膝蓋要保持伸直，腰不要拱起。", videoUrl: "" },
+      { id: "ankle-alphabet", part: "足踝", name: "腳踝寫字母", reps: "A 到 Z 寫一輪，每天 2–3 次",
+        steps: ["坐著，把腳抬離地面", "用大腳趾在空中寫英文字母 A 到 Z", "動作盡量大但不痛"],
+        caution: "腳踝扭傷急性期（腫脹劇烈）先休息冰敷。", videoUrl: "" },
+      { id: "towel-curl", part: "足踝", name: "毛巾抓取", reps: "每次 1–2 分鐘，每天 2 次",
+        steps: ["坐著，腳底下平鋪一條毛巾", "用腳趾把毛巾往自己方向抓皺", "放鬆後重複"],
+        caution: "可以強化足底肌群，適合足底筋膜炎。", videoUrl: "" },
+      { id: "calf-stretch", part: "足踝", name: "小腿與足底伸展", reps: "每側 30 秒，重複 3 次",
+        steps: ["面對牆，雙手扶牆，患側腳在後", "後腳腳跟貼地、膝蓋伸直", "身體往前傾，感覺小腿後側伸展"],
+        caution: "早上起床下床前先做，可減少足底筋膜炎的第一步疼痛。", videoUrl: "" }
+    ];
+    const REHAB_PARTS = ["頸椎", "肩關節", "腰椎", "肘腕", "髖關節", "膝關節", "足踝"];
+
+    // 問診部位（bodyPart）對應到復健影片的部位分類
+    function rehabPartOf(bodyPart) {
+      if (!bodyPart) return null;
+      return REHAB_PARTS.includes(bodyPart) ? bodyPart : null;
+    }
+
+    function youtubeEmbedUrl(url) {
+      if (!url) return "";
+      const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([\w-]{11})/);
+      return m ? `https://www.youtube.com/embed/${m[1]}` : "";
+    }
+
+    function youtubeSearchUrl(exerciseName) {
+      return `https://www.youtube.com/results?search_query=${encodeURIComponent(exerciseName + " 復健 衛教")}`;
+    }
+
+    // ===== X 光辨識器：拍攝部位 → 建議骨科次專科 =====
+    const XRAY_PARTS = {
+      "頸椎": "脊椎外科", "胸腰椎": "脊椎外科", "肩膀": "運動醫學科", "手肘／手腕／手指": "手外科",
+      "骨盆／髖關節": "關節重建科", "膝蓋": "關節重建科", "腳踝／足部": "足踝外科", "其他部位骨折": "骨折創傷科"
+    };
+
+    // 分析圖片色彩：X 光片是灰階影像，彩色照片多半是拍錯張（例如拍到傷口或人）
+    function analyzeXrayImage(img) {
+      const canvas = document.createElement("canvas");
+      const size = 160;
+      const ratio = Math.min(size / img.naturalWidth, size / img.naturalHeight, 1);
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * ratio));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * ratio));
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let satSum = 0, lumSum = 0, lumSqSum = 0, n = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        satSum += max === 0 ? 0 : (max - min) / max;
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        lumSum += lum; lumSqSum += lum * lum; n++;
+      }
+      const saturation = satSum / n;
+      const mean = lumSum / n;
+      const contrast = Math.sqrt(Math.max(lumSqSum / n - mean * mean, 0));
+      return {
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+        isGrayscale: saturation < 0.12,
+        lowContrast: contrast < 25,
+        tooSmall: img.naturalWidth < 400 || img.naturalHeight < 400
+      };
+    }
+
+    // ===== 復健／用藥提醒：存在這台裝置的瀏覽器裡（localStorage），不會上傳到伺服器 =====
+    const REMINDER_STORAGE_KEY = "ortho_reminders_v1";
+    const REMINDER_DONE_KEY = "ortho_reminders_done_v1";
+    const WEEKDAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"]; // 對應 JS 的 Date.getDay()
+
+    function loadJson(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+
+    function saveJson(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* 無痕模式等情況存不了，就只在這次開啟期間有效 */ }
+    }
+
+    function todayKey(d = new Date()) {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+
+    // 匯出成行事曆檔（.ics）：網頁關掉就無法跳提醒，匯入手機行事曆後即使沒開網頁也會準時通知
+    function buildReminderIcs(reminders) {
+      const byday = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+      const now = new Date();
+      const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+      const start = todayKey(now).replace(/-/g, "");
+      const esc = (t) => String(t || "").replace(/\\/g, "\\\\").replace(/[,;]/g, (c) => "\\" + c).replace(/\n/g, "\\n");
+      const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Ortho Smart Triage//Reminders//ZH-TW", "CALSCALE:GREGORIAN"];
+      for (const r of reminders) {
+        if (!r.enabled || !r.days.length) continue;
+        const [hh, mm] = r.time.split(":");
+        const label = r.type === "med" ? "💊 用藥" : "🏃 復健";
+        lines.push(
+          "BEGIN:VEVENT",
+          `UID:${r.id}@ortho-triage`,
+          `DTSTAMP:${stamp}`,
+          `DTSTART:${start}T${hh}${mm}00`,
+          "DURATION:PT15M",
+          `RRULE:FREQ=WEEKLY;BYDAY=${r.days.map((d) => byday[d]).join(",")}`,
+          `SUMMARY:${esc(`${label}：${r.title}`)}`,
+          `DESCRIPTION:${esc(r.note || "")}`,
+          "BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${esc(r.title)}`, "TRIGGER:PT0M", "END:VALARM",
+          "END:VEVENT"
+        );
+      }
+      lines.push("END:VCALENDAR");
+      return lines.join("\r\n");
+    }
 
     // 向後端查詢：某科別未來 7 天（含今天）的醫師班表與剩餘名額
     async function fetchDepartmentSchedule(department, days = 7) {
@@ -281,6 +436,29 @@
       const [rescheduleSchedule, setRescheduleSchedule] = useState(null);
       const [rescheduleScheduleLoading, setRescheduleScheduleLoading] = useState(false);
       const [rescheduleScheduleError, setRescheduleScheduleError] = useState("");
+      // 改期時是否也要換同科別的其他醫師（修改預約資訊）
+      const [rescheduleDoctor, setRescheduleDoctor] = useState("");
+      const [rescheduleAnyDoctor, setRescheduleAnyDoctor] = useState(false);
+      const [lastVisit, setLastVisit] = useState(null);
+      const [contactForm, setContactForm] = useState({ open: false, birth: "", phone: "", loading: false });
+
+      // X 光辨識器
+      const [xrayImage, setXrayImage] = useState(null); // { url, name, check }
+      const [xrayPart, setXrayPart] = useState("");
+      const [xrayView, setXrayView] = useState({ brightness: 100, contrast: 100, invert: false, zoom: 1 });
+
+      // 復健／用藥提醒（只存在這台裝置）
+      const [reminders, setReminders] = useState(() => loadJson(REMINDER_STORAGE_KEY, []));
+      const [reminderDone, setReminderDone] = useState(() => loadJson(REMINDER_DONE_KEY, {}));
+      const [reminderForm, setReminderForm] = useState({ type: "med", title: "", time: "08:00", days: [0, 1, 2, 3, 4, 5, 6], note: "" });
+      const [notifyPermission, setNotifyPermission] = useState(() => (typeof Notification === "undefined" ? "unsupported" : Notification.permission));
+      const [activeReminder, setActiveReminder] = useState(null);
+      const firedRemindersRef = useRef({});
+
+      // 復健影片教學
+      const [rehabPart, setRehabPart] = useState("全部");
+      const [rehabOpenId, setRehabOpenId] = useState(null);
+      const [toast, setToast] = useState("");
 
       const recognitionRef = useRef(null);
       const textInputRef = useRef(null);
@@ -290,6 +468,45 @@
       useEffect(() => {
         latestRef.current = { state, bodyPart, qaStep, answers, chatHistory };
       }, [state, bodyPart, qaStep, answers, chatHistory]);
+
+      useEffect(() => { saveJson(REMINDER_STORAGE_KEY, reminders); }, [reminders]);
+      useEffect(() => { saveJson(REMINDER_DONE_KEY, reminderDone); }, [reminderDone]);
+
+      useEffect(() => {
+        if (!toast) return;
+        const t = setTimeout(() => setToast(""), 2500);
+        return () => clearTimeout(t);
+      }, [toast]);
+
+      // 每 20 秒檢查一次：時間到了、今天有排、還沒打勾完成的提醒就跳出來（在哪個畫面都會提醒）
+      useEffect(() => {
+        const check = () => {
+          const now = new Date();
+          const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+          const dayKey = todayKey(now);
+          const doneToday = reminderDone[dayKey] || [];
+          for (const r of reminders) {
+            if (!r.enabled || r.time !== hhmm || !r.days.includes(now.getDay()) || doneToday.includes(r.id)) continue;
+            const firedKey = `${r.id}|${dayKey}|${hhmm}`;
+            if (firedRemindersRef.current[firedKey]) continue;
+            firedRemindersRef.current[firedKey] = true;
+            const label = r.type === "med" ? "用藥時間到了" : "復健時間到了";
+            setActiveReminder(r);
+            speak(`${label}：${r.title}`);
+            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+              try { new Notification(`🦴 ${label}`, { body: r.title + (r.note ? `\n${r.note}` : ""), tag: firedKey }); } catch (e) { /* 部分手機瀏覽器只允許 Service Worker 發通知 */ }
+            }
+          }
+        };
+        check();
+        const timer = setInterval(check, 20000);
+        return () => clearInterval(timer);
+      }, [reminders, reminderDone]);
+
+      // 換圖或離開 X 光頁時釋放暫存的圖片網址，避免佔記憶體
+      useEffect(() => {
+        return () => { if (xrayImage?.url) URL.revokeObjectURL(xrayImage.url); };
+      }, [xrayImage]);
 
       // AI 自動安排門診：進入 RESULT 畫面時，向後端查詢「最接近現在時間、還有名額」的門診時段，
       // 若使用者是直接指名某位醫師（preferredDoctor），就只在該醫師的班表裡找；
@@ -354,10 +571,15 @@
 
       function speak(message) {
         if (!window.speechSynthesis) return;
-        const utterance = new SpeechSynthesisUtterance(message);
-        utterance.lang = "zh-TW";
-        speechSynthesis.cancel();
-        speechSynthesis.speak(utterance);
+        // 語音播報失敗（例如部分 App 內建瀏覽器不支援）不能讓整個畫面當掉，失敗就安靜略過
+        try {
+          const utterance = new SpeechSynthesisUtterance(message);
+          utterance.lang = "zh-TW";
+          speechSynthesis.cancel();
+          speechSynthesis.speak(utterance);
+        } catch (e) {
+          console.warn("語音播報失敗：", e);
+        }
       }
 
       function startRecord() {
@@ -675,6 +897,10 @@
         setLastPatientVoiceTranscript(""); setRagLoading(false); setRagError("");
         setRagAnswer(""); setRagChunks([]); setChatHistory([]); setExternalHint("");
         setSearchId(""); setHistoryList(null);
+        setLastVisit(null); setRescheduleTarget(null); setRescheduleDoctor(""); setRescheduleAnyDoctor(false);
+        setContactForm({ open: false, birth: "", phone: "", loading: false });
+        setXrayImage(null); setXrayPart(""); setXrayView({ brightness: 100, contrast: 100, invert: false, zoom: 1 });
+        setRehabOpenId(null);
       }
 
       function startDirectBooking() {
@@ -684,6 +910,103 @@
         setPrompt("請選擇骨科次專科，查看未來 7 天的醫師班表");
         speak("已為您切換至直接掛號流程，請先選擇科別");
         setState(STATES.PATIENT_INFO);
+      }
+
+      function goToFeature(nextState, message) {
+        setState(nextState);
+        setPrompt(message);
+        speak(message);
+      }
+
+      // ---------- X 光辨識器 ----------
+      function handleXrayFile(e) {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!file) return;
+        if (!file.type.startsWith("image/")) { alert("請上傳圖片檔（JPG、PNG 等）。"); return; }
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          let check = null;
+          try { check = analyzeXrayImage(img); } catch (err) { console.warn("圖片分析失敗", err); }
+          setXrayImage({ url, name: file.name, check });
+          setXrayView({ brightness: 100, contrast: 100, invert: false, zoom: 1 });
+          if (check && !check.isGrayscale) speak("這張圖片看起來是彩色照片，不像 X 光片，請確認是否上傳正確。");
+          else speak("X 光片已載入，請選擇拍攝部位。");
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); alert("圖片讀取失敗，請換一張再試。"); };
+        img.src = url;
+      }
+
+      function bookFromXray() {
+        const department = XRAY_PARTS[xrayPart];
+        if (!department) { alert("請先選擇 X 光拍攝部位。"); return; }
+        setIsDirectBooking(false);
+        applyDirectDoctorSelection({ department, doctor: null });
+      }
+
+      // ---------- 復健／用藥提醒 ----------
+      function addReminder(preset) {
+        const form = preset || reminderForm;
+        const title = (form.title || "").trim();
+        if (!title) { alert(form.type === "med" ? "請輸入藥名，例如：止痛藥 1 顆" : "請輸入復健項目，例如：直膝抬腿 3 組"); return false; }
+        if (!/^\d{2}:\d{2}$/.test(form.time)) { alert("請選擇提醒時間。"); return false; }
+        if (!form.days.length) { alert("請至少選擇一天。"); return false; }
+        const item = { id: `r${Date.now()}${Math.random().toString(36).slice(2, 6)}`, type: form.type, title, time: form.time, days: [...form.days].sort(), note: (form.note || "").trim(), enabled: true };
+        setReminders((prev) => [...prev, item].sort((a, b) => a.time.localeCompare(b.time)));
+        if (!preset) setReminderForm((prev) => ({ ...prev, title: "", note: "" }));
+        return true;
+      }
+
+      function toggleFormDay(day) {
+        setReminderForm((prev) => ({ ...prev, days: prev.days.includes(day) ? prev.days.filter((d) => d !== day) : [...prev.days, day] }));
+      }
+
+      function toggleReminderEnabled(id) {
+        setReminders((prev) => prev.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)));
+      }
+
+      function deleteReminder(id) {
+        if (!window.confirm("確定要刪除這個提醒嗎？")) return;
+        setReminders((prev) => prev.filter((r) => r.id !== id));
+      }
+
+      function toggleReminderDone(id) {
+        const key = todayKey();
+        setReminderDone((prev) => {
+          const today = prev[key] || [];
+          const nextToday = today.includes(id) ? today.filter((x) => x !== id) : [...today, id];
+          // 只保留最近 14 天的打勾紀錄，避免 localStorage 越存越多
+          const keep = Object.keys(prev).sort().slice(-13).filter((k) => k !== key);
+          const next = {};
+          for (const k of keep) next[k] = prev[k];
+          next[key] = nextToday;
+          return next;
+        });
+        if (activeReminder?.id === id) setActiveReminder(null);
+      }
+
+      async function requestNotifyPermission() {
+        if (typeof Notification === "undefined") { alert("這個瀏覽器不支援系統通知，提醒時會改用畫面跳出＋語音播報。"); return; }
+        const result = await Notification.requestPermission();
+        setNotifyPermission(result);
+        if (result === "granted") speak("已開啟通知，提醒時間到會跳出通知。");
+      }
+
+      function downloadReminderIcs() {
+        const active = reminders.filter((r) => r.enabled);
+        if (!active.length) { alert("目前沒有啟用中的提醒可以匯出。"); return; }
+        const blob = new Blob([buildReminderIcs(active)], { type: "text/calendar;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "骨科復健用藥提醒.ics";
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+
+      function addRehabReminder(exercise) {
+        const ok = addReminder({ type: "rehab", title: exercise.name, time: "20:00", days: [0, 1, 2, 3, 4, 5, 6], note: exercise.reps });
+        if (ok) setToast(`已加入每天 20:00 的復健提醒：${exercise.name}（可到「復健／用藥提醒」修改）`);
       }
 
       // 背景取得外部 AI（Google Apps Script）的補充建議，全程不 await、不阻塞問診，
@@ -1103,6 +1426,8 @@
             const data = await response.json();
             if (data.status === "success") {
               setHistoryList(data.data);
+              setLastVisit(data.last_visit || null);
+              setRescheduleTarget(null);
               if (data.data.length === 0) {
                 speak("查無掛號紀錄。");
               } else {
@@ -1146,6 +1471,7 @@
         const openReschedule = (item) => {
           setRescheduleTarget(item.appointment_no);
           setRescheduleDate(""); setRescheduleSlot("");
+          setRescheduleDoctor(item.doctor); setRescheduleAnyDoctor(false);
           setRescheduleSchedule(null); setRescheduleScheduleError("");
           setRescheduleScheduleLoading(true);
           fetchDepartmentSchedule(item.department)
@@ -1161,15 +1487,23 @@
           setActionLoading(item.appointment_no);
           try {
             const newSlot = `${rescheduleDate} ${rescheduleSlot}`;
+            const newDoctor = rescheduleDoctor || item.doctor;
             const response = await fetch(`${API_BASE}/api/booking/reschedule`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id_number: searchId.trim(), appointment_no: item.appointment_no, new_slot: newSlot })
+              body: JSON.stringify({
+                id_number: searchId.trim(),
+                appointment_no: item.appointment_no,
+                new_slot: newSlot,
+                ...(newDoctor !== item.doctor ? { new_doctor: newDoctor } : {})
+              })
             });
             const data = await response.json();
             if (data.status === "success") {
               speak(data.message);
-              setHistoryList((prev) => prev.map((h) => h.appointment_no === item.appointment_no ? { ...h, slot: newSlot } : h));
+              setHistoryList((prev) => prev.map((h) => h.appointment_no === item.appointment_no
+                ? { ...h, slot: newSlot, appointment_date: rescheduleDate, time_slot: rescheduleSlot, doctor: newDoctor }
+                : h));
               setRescheduleTarget(null);
             } else {
               alert("改期失敗：" + data.message);
@@ -1182,9 +1516,62 @@
           }
         };
 
+        const submitContactUpdate = async () => {
+          const birth = contactForm.birth.trim();
+          const phone = contactForm.phone.trim();
+          if (!birth || !phone) { alert("請填寫生日與新的手機號碼。"); return; }
+          if (!/^09\d{8}$/.test(phone)) { alert("手機格式不正確，需為 09 開頭的 10 位數字。"); return; }
+          setContactForm((prev) => ({ ...prev, loading: true }));
+          try {
+            const response = await fetch(`${API_BASE}/api/patient/update`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id_number: searchId.trim(), birth_date: birth, phone })
+            });
+            const data = await response.json();
+            if (response.ok && data.status === "success") {
+              speak(data.message);
+              setToast(data.message);
+              setContactForm({ open: false, birth: "", phone: "", loading: false });
+              return;
+            }
+            const msg = data.message || (Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join("；") : data.detail) || "請稍後再試。";
+            alert("修改失敗：" + msg);
+          } catch (err) {
+            console.error("修改聯絡資料 API 呼叫失敗", err);
+            alert("連線後端失敗，請確認伺服器已啟動。");
+          }
+          setContactForm((prev) => ({ ...prev, loading: false }));
+        };
+
+        const renderLastVisit = () => {
+          if (!lastVisit) return null;
+          const rehabPart = rehabPartOf(lastVisit.body_part);
+          return (
+            <div className="last-visit-card">
+              <div className="last-visit-badge">🗂 上次就診紀錄</div>
+              <div className="ai-booking-row"><span>看診日期</span><strong>{lastVisit.slot}</strong></div>
+              <div className="ai-booking-row"><span>科別／醫師</span><strong>{lastVisit.department}．{lastVisit.doctor}</strong></div>
+              {lastVisit.body_part ? <div className="ai-booking-row"><span>不適部位</span><strong>{lastVisit.body_part}</strong></div> : null}
+              {lastVisit.main_complaint ? <div className="ai-booking-row"><span>當時主訴</span><strong>{lastVisit.main_complaint}</strong></div> : null}
+              {lastVisit.ai_suggestion ? <p className="last-visit-note">AI 建議：{lastVisit.ai_suggestion}</p> : null}
+              <div className="last-visit-actions">
+                <button type="button" className="mini-btn" onClick={() => applyDirectDoctorSelection({ department: lastVisit.department, doctor: lastVisit.doctor })}>
+                  🔁 再掛一次{lastVisit.doctor}（回診）
+                </button>
+                {rehabPart ? (
+                  <button type="button" className="mini-btn" onClick={() => { setRehabPart(rehabPart); goToFeature(STATES.REHAB, `${rehabPart}的居家復健動作教學`); }}>
+                    🎬 看{rehabPart}復健影片
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          );
+        };
+
         return (
           <div className="form-card">
-            <h3>掛號查詢／取消／改期</h3>
+            <h3>就診紀錄／修改預約</h3>
             <label className="field-label">請輸入身分證字號</label>
             <div className="input-row">
               <input
@@ -1199,26 +1586,35 @@
               </button>
             </div>
 
+            {historyList !== null && historyList.length > 0 && !lastVisit ? (
+              <p className="helper-text" style={{ marginTop: '16px' }}>目前還沒有已經看過診的紀錄（只有尚未到期的預約）。</p>
+            ) : null}
+            {historyList !== null ? renderLastVisit() : null}
+
             {historyList !== null && (
               <div style={{ marginTop: '20px' }}>
-                <h4 style={{ borderBottom: '1px solid #eee', paddingBottom: '8px' }}>查詢結果</h4>
+                <h4 style={{ borderBottom: '1px solid #eee', paddingBottom: '8px' }}>所有掛號紀錄</h4>
                 {historyList.length === 0 ? (
                   <p style={{ color: '#666', textAlign: 'center', padding: '15px' }}>目前沒有您的掛號紀錄。</p>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {historyList.map((item, idx) => {
                       const isCancelled = item.status === "cancelled";
+                      const isPast = !!item.is_past;
                       const isBusy = actionLoading === item.appointment_no;
                       return (
                         <div key={idx} style={{ padding: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', backgroundColor: isCancelled ? '#f5f5f5' : '#f9f9f9', opacity: isCancelled ? 0.7 : 1 }}>
                           <p style={{ margin: '0 0 5px 0', fontWeight: 'bold', color: '#1976d2' }}>
                             {item.appointment_no ? `#${item.appointment_no} ` : ''}{item.department} - {item.doctor}
                             {isCancelled ? <span style={{ marginLeft: '8px', fontSize: '12px', color: '#c0392b', fontWeight: 'bold' }}>已取消</span> : null}
+                            {!isCancelled && isPast ? <span style={{ marginLeft: '8px', fontSize: '12px', color: '#059669', fontWeight: 'bold' }}>已看診</span> : null}
+                            {!isCancelled && !isPast ? <span style={{ marginLeft: '8px', fontSize: '12px', color: '#1d4ed8', fontWeight: 'bold' }}>即將看診</span> : null}
                           </p>
                           <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}>看診時間：{item.slot}</p>
+                          {item.main_complaint ? <p style={{ margin: '0 0 5px 0', fontSize: '13px', color: '#555' }}>主訴：{item.body_part ? `${item.body_part}／` : ''}{item.main_complaint}</p> : null}
                           <p style={{ margin: '0', fontSize: '12px', color: '#888' }}>預約者：{item.name} | 預約建立於：{item.created_at}</p>
 
-                          {!isCancelled ? (
+                          {!isCancelled && !isPast ? (
                             <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                               <button type="button" className="mini-btn" style={{ margin: 0, flex: 1, backgroundColor: '#fff', color: '#1976d2', border: '1px solid #1976d2' }} onClick={() => openReschedule(item)} disabled={isBusy}>
                                 改期
@@ -1231,16 +1627,30 @@
 
                           {rescheduleTarget === item.appointment_no ? (
                             <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fff', border: '1px dashed #1976d2', borderRadius: '8px' }}>
-                              <label className="field-label" style={{ display: 'block' }}>{item.doctor} 未來 7 天班表（點選新時段）</label>
+                              <label className="reschedule-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={rescheduleAnyDoctor}
+                                  onChange={(e) => {
+                                    setRescheduleAnyDoctor(e.target.checked);
+                                    setRescheduleDoctor(item.doctor); setRescheduleDate(""); setRescheduleSlot("");
+                                  }}
+                                />
+                                也可以改掛{item.department}的其他醫師
+                              </label>
+                              <label className="field-label" style={{ display: 'block' }}>
+                                {rescheduleAnyDoctor ? `${item.department}所有醫師` : item.doctor} 未來 7 天班表（點選新時段）
+                              </label>
                               {renderScheduleGrid(
                                 rescheduleSchedule, rescheduleScheduleLoading, rescheduleScheduleError,
-                                (doc, date, slot) => { setRescheduleDate(date); setRescheduleSlot(slot); },
-                                item.doctor,
-                                { doctor: item.doctor, date: rescheduleDate, slot: rescheduleSlot }
+                                (doc, date, slot) => { setRescheduleDoctor(doc); setRescheduleDate(date); setRescheduleSlot(slot); },
+                                rescheduleAnyDoctor ? null : item.doctor,
+                                { doctor: rescheduleDoctor, date: rescheduleDate, slot: rescheduleSlot }
                               )}
                               {rescheduleDate && rescheduleSlot ? (
                                 <div style={{ fontSize: '13px', color: '#1976d2', margin: '10px 0', fontWeight: 'bold' }}>
-                                  ✅ 已選擇：{rescheduleDate}．{rescheduleSlot}
+                                  ✅ 已選擇：{rescheduleDoctor}．{rescheduleDate}．{rescheduleSlot}
+                                  {rescheduleDoctor !== item.doctor ? `（由${item.doctor}改為${rescheduleDoctor}）` : ''}
                                 </div>
                               ) : null}
                               <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
@@ -1259,6 +1669,236 @@
               </div>
             )}
 
+            {historyList !== null && historyList.length > 0 ? (
+              <div className="contact-edit">
+                {!contactForm.open ? (
+                  <button type="button" className="ghost-btn" onClick={() => setContactForm((prev) => ({ ...prev, open: true }))}>📱 修改聯絡手機</button>
+                ) : (
+                  <>
+                    <h4 style={{ margin: '0 0 4px' }}>修改聯絡手機</h4>
+                    <p className="helper-text" style={{ margin: 0 }}>為保護個資，需輸入掛號時填寫的生日才能修改。</p>
+                    <label className="field-label">生日</label>
+                    <input className="text-input" value={contactForm.birth} placeholder="YYYY/MM/DD" onChange={(e) => setContactForm((prev) => ({ ...prev, birth: e.target.value }))} />
+                    <label className="field-label">新的手機號碼</label>
+                    <input className="text-input" value={contactForm.phone} placeholder="09xxxxxxxx" inputMode="numeric" onChange={(e) => setContactForm((prev) => ({ ...prev, phone: e.target.value.trim() }))} />
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                      <button type="button" className="secondary-btn" style={{ margin: 0, flex: 1 }} onClick={() => setContactForm({ open: false, birth: "", phone: "", loading: false })}>取消</button>
+                      <button type="button" className="mini-btn" style={{ margin: 0, flex: 1 }} onClick={submitContactUpdate} disabled={contactForm.loading}>{contactForm.loading ? "處理中..." : "確認修改"}</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
+
+            <button type="button" className="secondary-btn" onClick={resetAll}>返回主畫面</button>
+          </div>
+        );
+      }
+
+      function renderXray() {
+        const check = xrayImage?.check;
+        const department = XRAY_PARTS[xrayPart];
+        const filter = `brightness(${xrayView.brightness}%) contrast(${xrayView.contrast}%)${xrayView.invert ? " invert(1)" : ""}`;
+        return (
+          <div className="form-card">
+            <h3>🩻 X 光辨識器</h3>
+            <div className="notice-box" style={{ padding: '14px 16px', marginBottom: '14px' }}>
+              <p style={{ fontSize: '14px' }}>
+                上傳或拍下 X 光片，系統會檢查影像是否像 X 光片、提供放大／亮度／反相檢視，並依拍攝部位建議掛號科別。
+                <strong>本功能不會自動判讀骨折或病灶</strong>，影像判讀請以醫師為準；圖片只在你的裝置上處理，不會上傳。
+              </p>
+            </div>
+
+            <label className="xray-upload">
+              <input type="file" accept="image/*" capture="environment" onChange={handleXrayFile} />
+              <span>{xrayImage ? "📷 換一張 X 光片" : "📷 上傳或拍攝 X 光片"}</span>
+            </label>
+
+            {xrayImage ? (
+              <>
+                <div className="xray-viewer">
+                  <img src={xrayImage.url} alt="上傳的 X 光片" style={{ filter, transform: `scale(${xrayView.zoom})` }} />
+                </div>
+
+                {check ? (
+                  <div className="xray-checks">
+                    <div className={check.isGrayscale ? "xray-check ok" : "xray-check warn"}>
+                      {check.isGrayscale ? "✅ 灰階影像，看起來像 X 光片" : "⚠️ 這是彩色照片，看起來不像 X 光片，請確認是否上傳正確"}
+                    </div>
+                    {check.lowContrast ? <div className="xray-check warn">⚠️ 影像對比偏低，建議在光線均勻處重拍，或用下方對比度調整</div> : null}
+                    {check.tooSmall ? <div className="xray-check warn">⚠️ 解析度偏低（{check.width}×{check.height}），細節可能看不清楚</div> : null}
+                  </div>
+                ) : null}
+
+                <div className="xray-controls">
+                  <label>亮度 {xrayView.brightness}%
+                    <input type="range" min="50" max="200" value={xrayView.brightness} onChange={(e) => setXrayView((v) => ({ ...v, brightness: Number(e.target.value) }))} />
+                  </label>
+                  <label>對比 {xrayView.contrast}%
+                    <input type="range" min="50" max="250" value={xrayView.contrast} onChange={(e) => setXrayView((v) => ({ ...v, contrast: Number(e.target.value) }))} />
+                  </label>
+                  <label>放大 {xrayView.zoom.toFixed(1)}x
+                    <input type="range" min="1" max="3" step="0.1" value={xrayView.zoom} onChange={(e) => setXrayView((v) => ({ ...v, zoom: Number(e.target.value) }))} />
+                  </label>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button type="button" className="ghost-btn" onClick={() => setXrayView((v) => ({ ...v, invert: !v.invert }))}>{xrayView.invert ? "取消反相" : "黑白反相"}</button>
+                    <button type="button" className="ghost-btn" onClick={() => setXrayView({ brightness: 100, contrast: 100, invert: false, zoom: 1 })}>重設</button>
+                  </div>
+                </div>
+
+                <label className="field-label">這張 X 光拍的是哪個部位？</label>
+                <div className="body-legend" style={{ justifyContent: 'flex-start' }}>
+                  {Object.keys(XRAY_PARTS).map((part) => (
+                    <button type="button" key={part} className={`chip ${xrayPart === part ? "active" : ""}`} onClick={() => setXrayPart(part)}>{part}</button>
+                  ))}
+                </div>
+
+                {department ? (
+                  <div className="ai-booking-summary" style={{ marginTop: '14px' }}>
+                    <div className="ai-booking-badge">🤖 依拍攝部位建議</div>
+                    <div className="ai-booking-row"><span>建議骨科次專科</span><strong>{department}</strong></div>
+                    <p className="helper-text" style={{ margin: '8px 0 0' }}>看診時記得帶著 X 光片（或光碟），讓醫師直接判讀。</p>
+                  </div>
+                ) : null}
+
+                <button type="button" className="btn" onClick={bookFromXray} disabled={!department}>
+                  {department ? `帶著這張 X 光掛${department}` : "請先選擇拍攝部位"}
+                </button>
+              </>
+            ) : null}
+
+            <button type="button" className="secondary-btn" onClick={resetAll}>返回主畫面</button>
+          </div>
+        );
+      }
+
+      function renderReminders() {
+        const now = new Date();
+        const dayKey = todayKey(now);
+        const doneToday = reminderDone[dayKey] || [];
+        const todays = reminders.filter((r) => r.enabled && r.days.includes(now.getDay()));
+        return (
+          <div className="form-card">
+            <h3>⏰ 復健／用藥提醒</h3>
+            <p className="helper-text" style={{ marginTop: 0 }}>
+              提醒只存在這台裝置，不會上傳。網頁開著時，時間到會跳出提醒並語音播報；
+              想要關掉網頁也能收到通知，請按下方「匯入手機行事曆」。
+            </p>
+
+            <div className="reminder-section">
+              <h4>今天的待辦（{doneToday.filter((id) => todays.some((r) => r.id === id)).length}/{todays.length}）</h4>
+              {todays.length === 0 ? (
+                <div className="rag-empty" style={{ color: 'var(--muted)' }}>今天沒有排定的提醒。</div>
+              ) : todays.map((r) => {
+                const done = doneToday.includes(r.id);
+                return (
+                  <label key={r.id} className={`reminder-today ${done ? "done" : ""}`}>
+                    <input type="checkbox" checked={done} onChange={() => toggleReminderDone(r.id)} />
+                    <span className="reminder-time">{r.time}</span>
+                    <span>{r.type === "med" ? "💊" : "🏃"} {r.title}</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="reminder-section">
+              <h4>新增提醒</h4>
+              <div className="reminder-type-row">
+                <button type="button" className={`chip ${reminderForm.type === "med" ? "active" : ""}`} onClick={() => setReminderForm((f) => ({ ...f, type: "med" }))}>💊 用藥</button>
+                <button type="button" className={`chip ${reminderForm.type === "rehab" ? "active" : ""}`} onClick={() => setReminderForm((f) => ({ ...f, type: "rehab" }))}>🏃 復健</button>
+              </div>
+              <label className="field-label">{reminderForm.type === "med" ? "藥名／劑量" : "復健項目"}</label>
+              <input className="text-input" value={reminderForm.title} onChange={(e) => setReminderForm((f) => ({ ...f, title: e.target.value }))}
+                placeholder={reminderForm.type === "med" ? "例如：消炎止痛藥 1 顆（飯後）" : "例如：直膝抬腿 10 下 × 3 組"} />
+              <label className="field-label">提醒時間</label>
+              <input className="text-input" type="time" value={reminderForm.time} onChange={(e) => setReminderForm((f) => ({ ...f, time: e.target.value }))} />
+              <label className="field-label">重複（星期）</label>
+              <div className="reminder-days">
+                {WEEKDAY_SHORT.map((label, day) => (
+                  <button type="button" key={day} className={`day-btn ${reminderForm.days.includes(day) ? "active" : ""}`} onClick={() => toggleFormDay(day)}>{label}</button>
+                ))}
+              </div>
+              <label className="field-label">備註（選填）</label>
+              <input className="text-input" value={reminderForm.note} onChange={(e) => setReminderForm((f) => ({ ...f, note: e.target.value }))} placeholder="例如：配溫開水、運動前先熱敷" />
+              <button type="button" className="btn" onClick={() => { if (addReminder()) setToast("已新增提醒"); }}>＋ 新增提醒</button>
+            </div>
+
+            <div className="reminder-section">
+              <h4>所有提醒（{reminders.length}）</h4>
+              {reminders.length === 0 ? (
+                <div className="rag-empty" style={{ color: 'var(--muted)' }}>還沒有提醒，可以從上方新增，或到「復健影片教學」一鍵加入。</div>
+              ) : reminders.map((r) => (
+                <div key={r.id} className={`reminder-item ${r.enabled ? "" : "off"}`}>
+                  <div>
+                    <div className="reminder-item-title">{r.type === "med" ? "💊" : "🏃"} {r.title}</div>
+                    <div className="reminder-item-meta">
+                      {r.time}．{r.days.length === 7 ? "每天" : `每週${r.days.map((d) => WEEKDAY_SHORT[d]).join("、")}`}{r.note ? `．${r.note}` : ""}
+                    </div>
+                  </div>
+                  <div className="reminder-item-actions">
+                    <button type="button" className="ghost-btn" onClick={() => toggleReminderEnabled(r.id)}>{r.enabled ? "暫停" : "啟用"}</button>
+                    <button type="button" className="ghost-btn danger" onClick={() => deleteReminder(r.id)}>刪除</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="reminder-section" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {notifyPermission === "default" ? (
+                <button type="button" className="mini-btn" style={{ flex: 1 }} onClick={requestNotifyPermission}>🔔 開啟瀏覽器通知</button>
+              ) : null}
+              <button type="button" className="mini-btn" style={{ flex: 1 }} onClick={downloadReminderIcs}>📅 匯入手機行事曆（.ics）</button>
+            </div>
+            {notifyPermission === "denied" ? <p className="helper-text">瀏覽器通知已被封鎖，提醒時只會在畫面跳出並語音播報；可到瀏覽器網站設定重新允許。</p> : null}
+
+            <button type="button" className="secondary-btn" onClick={resetAll}>返回主畫面</button>
+          </div>
+        );
+      }
+
+      function renderRehab() {
+        const list = rehabPart === "全部" ? REHAB_EXERCISES : REHAB_EXERCISES.filter((x) => x.part === rehabPart);
+        return (
+          <div className="form-card">
+            <h3>🎬 復健影片教學</h3>
+            <p className="helper-text" style={{ marginTop: 0 }}>常見骨科居家復健動作。開始前請先確認醫師或物理治療師同意，運動中若疼痛明顯加劇、麻木或腫脹請立即停止。</p>
+            <div className="body-legend" style={{ justifyContent: 'flex-start' }}>
+              {["全部", ...REHAB_PARTS].map((part) => (
+                <button type="button" key={part} className={`chip ${rehabPart === part ? "active" : ""}`} onClick={() => { setRehabPart(part); setRehabOpenId(null); }}>{part}</button>
+              ))}
+            </div>
+            <div className="rehab-list">
+              {list.map((ex) => {
+                const open = rehabOpenId === ex.id;
+                const embed = youtubeEmbedUrl(ex.videoUrl);
+                return (
+                  <div key={ex.id} className={`rehab-card ${open ? "open" : ""}`}>
+                    <button type="button" className="rehab-card-head" onClick={() => setRehabOpenId(open ? null : ex.id)} aria-expanded={open}>
+                      <span className="rag-chip" style={{ background: 'var(--primary-soft)', color: 'var(--primary-strong)' }}>{ex.part}</span>
+                      <span className="rehab-name">{ex.name}</span>
+                      <span className="rehab-arrow">{open ? "▲" : "▼"}</span>
+                    </button>
+                    {open ? (
+                      <div className="rehab-body">
+                        {embed ? (
+                          <div className="rehab-video">
+                            <iframe src={embed} title={ex.name} allow="accelerometer; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+                          </div>
+                        ) : null}
+                        <ol className="rehab-steps">{ex.steps.map((st, i) => <li key={i}>{st}</li>)}</ol>
+                        <p className="rehab-reps">📌 建議次數：{ex.reps}</p>
+                        <p className="rehab-caution">⚠️ {ex.caution}</p>
+                        <div className="last-visit-actions">
+                          <button type="button" className="mini-btn" onClick={() => speak(`${ex.name}。${ex.steps.join("。")}。建議次數：${ex.reps}`)}>🔊 語音唸步驟</button>
+                          {!embed ? <a className="mini-btn" href={youtubeSearchUrl(ex.name)} target="_blank" rel="noopener noreferrer">▶️ 看示範影片</a> : null}
+                          <button type="button" className="mini-btn" onClick={() => addRehabReminder(ex)}>⏰ 加入每日提醒</button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
             <button type="button" className="secondary-btn" onClick={resetAll}>返回主畫面</button>
           </div>
         );
@@ -1287,12 +1927,29 @@
                 </button>
                 <button type="button" className="intent-btn" onClick={() => {
                   setState(STATES.CHECK_HISTORY);
-                  setPrompt("請輸入身分證字號查詢、取消或改期掛號");
-                  speak("請輸入您的身分證字號以查詢、取消或改期掛號");
+                  setPrompt("請輸入身分證字號查詢就診紀錄或修改預約");
+                  speak("請輸入您的身分證字號，查詢上次就診紀錄或修改預約");
                 }}>
                   <span className="intent-emoji">📋</span>
-                  <span className="intent-title">查詢／取消／改期</span>
-                  <span className="intent-desc">管理我已經預約的掛號</span>
+                  <span className="intent-title">就診紀錄／修改預約</span>
+                  <span className="intent-desc">上次就診紀錄、改期、改醫師、取消、修改聯絡手機</span>
+                </button>
+              </div>
+              <div className="intent-options intent-options-grid">
+                <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.XRAY, "請上傳或拍攝 X 光片")}>
+                  <span className="intent-emoji">🩻</span>
+                  <span className="intent-title">X 光辨識器</span>
+                  <span className="intent-desc">檢視 X 光片，依部位建議科別</span>
+                </button>
+                <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.REMINDERS, "設定復健與用藥提醒")}>
+                  <span className="intent-emoji">⏰</span>
+                  <span className="intent-title">復健／用藥提醒</span>
+                  <span className="intent-desc">定時提醒吃藥、做復健</span>
+                </button>
+                <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.REHAB, "居家復健動作教學")}>
+                  <span className="intent-emoji">🎬</span>
+                  <span className="intent-title">復健影片教學</span>
+                  <span className="intent-desc">各部位居家復健動作示範</span>
                 </button>
               </div>
               <div className="intent-voice-hint">
@@ -1493,6 +2150,10 @@
           return renderCheckHistory();
         }
 
+        if (state === STATES.XRAY) return renderXray();
+        if (state === STATES.REMINDERS) return renderReminders();
+        if (state === STATES.REHAB) return renderRehab();
+
         return renderDefaultInput();
       }
 
@@ -1506,7 +2167,20 @@
               <p className="prompt">{prompt}</p>
             </div>
           </div>
+          {activeReminder ? (
+            <div className="reminder-alert" role="alert">
+              <div>
+                <strong>{activeReminder.type === "med" ? "💊 用藥時間到了" : "🏃 復健時間到了"}</strong>
+                <div>{activeReminder.title}{activeReminder.note ? `（${activeReminder.note}）` : ""}</div>
+              </div>
+              <div className="reminder-alert-actions">
+                <button type="button" className="mini-btn" onClick={() => toggleReminderDone(activeReminder.id)}>✅ 完成了</button>
+                <button type="button" className="ghost-btn" onClick={() => setActiveReminder(null)}>稍後</button>
+              </div>
+            </div>
+          ) : null}
           {renderContent()}
+          {toast ? <div className="toast" role="status">{toast}</div> : null}
           <div className="footer-note">
             本介面為前端示意版，非醫療診斷；若有肢體劇痛、明顯變形、骨頭外露、下肢麻木無力或大小便失禁等急症，請立即就醫或撥打 119。
           </div>

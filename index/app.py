@@ -102,6 +102,21 @@ class RescheduleRequest(BaseModel):
     id_number: str
     appointment_no: int
     new_slot: str
+    # 選填：同一科別內改掛其他醫師（不給就維持原本的醫師）
+    new_doctor: Optional[str] = None
+
+class PatientUpdateRequest(BaseModel):
+    id_number: str
+    birth_date: str   # 用生日當第二道驗證，避免只知道身分證字號就能改別人的聯絡資料
+    phone: str
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v):
+        v = v.strip()
+        if not re.match(r"^09\d{8}$", v):
+            raise ValueError("手機格式不正確，需為 09 開頭的 10 位數字")
+        return v
 
 # ===== RAG 知識庫（本地 SQLite 向量庫，非病人個資） =====
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -498,31 +513,60 @@ def get_booking_history(req: HistoryRequest):
         id_number = req.id_number.upper()
         patient_res = supabase.table("patients").select("id, name").eq("id_number", id_number).execute()
         if not patient_res.data:
-            return {"status": "success", "data": []}
+            return {"status": "success", "data": [], "last_visit": None}
 
         patient = patient_res.data[0]
         appt_res = (
             supabase.table("appointments")
-            .select("appointment_no, department, doctor, appointment_date, time_slot, status, created_at")
+            .select("id, appointment_no, department, doctor, appointment_date, time_slot, status, created_at")
             .eq("patient_id", patient["id"])
             .order("created_at", desc=True)
             .execute()
         )
 
-        history = [
-            {
+        # 一併帶出每次掛號當時的 AI 問診紀錄，讓病人回顧「上次看了什麼問題」
+        triage_res = (
+            supabase.table("triage_records")
+            .select("appointment_id, body_part, main_complaint, ai_suggestion")
+            .eq("patient_id", patient["id"])
+            .execute()
+        )
+        triage_by_appointment = {
+            t["appointment_id"]: t for t in (triage_res.data or []) if t.get("appointment_id")
+        }
+
+        today_str = datetime.now().date().isoformat()
+        history = []
+        for a in appt_res.data:
+            triage = triage_by_appointment.get(a["id"]) or {}
+            history.append({
                 "name": patient["name"],
                 "appointment_no": a.get("appointment_no"),
                 "department": a["department"],
                 "doctor": a["doctor"],
+                "appointment_date": a["appointment_date"],
+                "time_slot": a["time_slot"],
                 "slot": f"{a['appointment_date']} {a['time_slot']}",
                 "status": a.get("status", "confirmed"),
+                "is_past": a["appointment_date"] < today_str,
                 "created_at": a["created_at"],
-            }
-            for a in appt_res.data
-        ]
+                "body_part": triage.get("body_part"),
+                "main_complaint": triage.get("main_complaint"),
+                "ai_suggestion": triage.get("ai_suggestion"),
+            })
 
-        return {"status": "success", "data": history}
+        # 上次就診：看診日期已經過去、且沒有取消的掛號裡，日期最近的一筆
+        past_visits = [h for h in history if h["is_past"] and h["status"] != "cancelled"]
+        def visit_order(h):
+            session = SESSION_BY_TIME_SLOT.get(h["time_slot"])
+            return (h["appointment_date"], SESSION_ORDER.index(session) if session in SESSION_ORDER else -1)
+        last_visit = max(past_visits, key=visit_order, default=None)
+
+        return {
+            "status": "success",
+            "data": history,
+            "last_visit": last_visit,
+        }
     except Exception as e:
         return {"status": "error", "message": f"查詢失敗: {str(e)}"}
 
@@ -570,7 +614,7 @@ def reschedule_booking(req: RescheduleRequest):
 
         appt_res = (
             supabase.table("appointments")
-            .select("id, status, doctor")
+            .select("id, status, doctor, department")
             .eq("patient_id", patient_id)
             .eq("appointment_no", req.appointment_no)
             .execute()
@@ -581,7 +625,13 @@ def reschedule_booking(req: RescheduleRequest):
         if appt["status"] != "confirmed":
             return {"status": "error", "message": "此掛號目前狀態無法改期。"}
 
-        doctor = appt["doctor"]
+        doctor = req.new_doctor or appt["doctor"]
+        if doctor != appt["doctor"]:
+            doctor_info = DOCTORS.get(doctor)
+            if not doctor_info:
+                return {"status": "error", "message": f"查無此醫師：{doctor}"}
+            if appt["department"] not in doctor_info["departments"]:
+                return {"status": "error", "message": f"{doctor} 並非{appt['department']}的醫師，無法改掛。"}
         new_date, new_time_slot = (req.new_slot.split(" ", 1) + [""])[:2]
         new_time_slot = new_time_slot or req.new_slot
         try:
@@ -606,13 +656,35 @@ def reschedule_booking(req: RescheduleRequest):
             return {"status": "error", "message": f"{doctor} 在 {new_date} {new_time_slot} 已額滿，請選擇其他時段。"}
 
         supabase.table("appointments").update({
+            "doctor": doctor,
             "appointment_date": new_date,
             "time_slot": new_time_slot,
         }).eq("id", appt["id"]).execute()
 
-        return {"status": "success", "message": f"已為您改期至 {new_date} {new_time_slot}。"}
+        return {"status": "success", "message": f"已為您改期至 {new_date} {new_time_slot} {doctor}。"}
     except Exception as e:
         return {"status": "error", "message": f"改期失敗: {str(e)}"}
+
+@app.post("/api/patient/update")
+def update_patient_contact(req: PatientUpdateRequest):
+    """修改預約聯絡資訊（手機）。需要身分證字號 + 生日同時相符才能修改。"""
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+
+    try:
+        id_number = req.id_number.strip().upper()
+        birth_date = req.birth_date.strip().replace("/", "-")
+        patient_res = supabase.table("patients").select("id, birth_date").eq("id_number", id_number).execute()
+        if not patient_res.data:
+            return {"status": "error", "message": "查無此身分證字號的病人資料。"}
+        patient = patient_res.data[0]
+        if not patient.get("birth_date") or patient["birth_date"] != birth_date:
+            return {"status": "error", "message": "生日與掛號時填寫的資料不符，無法修改。"}
+
+        supabase.table("patients").update({"phone": req.phone}).eq("id", patient["id"]).execute()
+        return {"status": "success", "message": f"已將聯絡手機更新為 {req.phone}。"}
+    except Exception as e:
+        return {"status": "error", "message": f"修改資料失敗: {str(e)}"}
 
 # 管理者專用，帶有網頁介面的掛號總覽 API（需登入）
 @app.get("/api/admin/all_bookings", response_class=HTMLResponse)

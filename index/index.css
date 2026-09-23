@@ -1255,3 +1255,377 @@ select:focus {
     flex: 0 0 128px;
   }
 }
+
+/* ===== 首頁：延伸功能（X 光／提醒／復健影片）三格 ===== */
+.intent-options-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 640px) {
+  .intent-options-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== 上次就診紀錄 ===== */
+.last-visit-card {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(5, 150, 105, 0.25);
+  background: linear-gradient(180deg, rgba(236, 253, 245, 0.95), rgba(255, 255, 255, 0.95));
+}
+
+.last-visit-badge {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(5, 150, 105, 0.12);
+  color: var(--success);
+  font-weight: 800;
+  font-size: 13.5px;
+}
+
+.last-visit-note {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.last-visit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.last-visit-actions .mini-btn {
+  padding: 10px 14px;
+  font-size: 14px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.reschedule-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--primary-strong);
+  cursor: pointer;
+}
+
+.contact-edit {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+/* ===== X 光辨識器 ===== */
+.xray-upload {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: rgba(239, 246, 255, 0.7);
+  color: var(--primary-strong);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.xray-upload input {
+  display: none;
+}
+
+.xray-viewer {
+  margin-top: 14px;
+  max-height: 420px;
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  background: #0b1120;
+  display: flex;
+  justify-content: center;
+}
+
+.xray-viewer img {
+  max-width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  transform-origin: center top;
+  transition: transform 0.15s ease;
+}
+
+.xray-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.xray-check {
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.xray-check.ok {
+  background: rgba(209, 250, 229, 0.9);
+  color: #047857;
+}
+
+.xray-check.warn {
+  background: rgba(254, 243, 199, 0.95);
+  color: #92400e;
+}
+
+.xray-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px 16px;
+  margin-top: 12px;
+  font-size: 13.5px;
+  color: var(--muted);
+  font-weight: 700;
+  align-items: end;
+}
+
+.xray-controls input[type="range"] {
+  width: 100%;
+}
+
+/* ===== 復健／用藥提醒 ===== */
+.reminder-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.reminder-section h4 {
+  margin: 0 0 10px;
+}
+
+.reminder-type-row,
+.reminder-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.day-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid #bfdbfe;
+  background: #fff;
+  color: var(--primary-strong);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.day-btn.active {
+  background: var(--primary);
+  border-color: transparent;
+  color: #fff;
+}
+
+.reminder-today {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
+.reminder-today input {
+  width: 20px;
+  height: 20px;
+}
+
+.reminder-today.done span {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.reminder-time {
+  font-weight: 800;
+  color: var(--primary-strong);
+  min-width: 48px;
+}
+
+.reminder-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.reminder-item.off {
+  opacity: 0.55;
+}
+
+.reminder-item-title {
+  font-weight: 800;
+}
+
+.reminder-item-meta {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.reminder-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.reminder-item-actions .ghost-btn {
+  padding: 8px 12px;
+}
+
+.ghost-btn.danger {
+  color: var(--danger);
+  border-color: rgba(220, 38, 38, 0.3);
+}
+
+.reminder-alert {
+  position: sticky;
+  top: 10px;
+  z-index: 20;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #78350f;
+  box-shadow: var(--shadow-md);
+}
+
+.reminder-alert-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.reminder-alert-actions .mini-btn {
+  padding: 10px 14px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: calc(100% - 32px);
+  padding: 12px 18px;
+  border-radius: 16px;
+  text-align: center;
+  background: rgba(15, 23, 42, 0.92);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: var(--shadow-md);
+}
+
+/* ===== 復健影片教學 ===== */
+.rehab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.rehab-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.92);
+  overflow: hidden;
+}
+
+.rehab-card.open {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.rehab-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 15.5px;
+}
+
+.rehab-name {
+  flex: 1;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.rehab-arrow {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rehab-body {
+  padding: 0 16px 16px;
+}
+
+.rehab-video {
+  position: relative;
+  padding-top: 56.25%;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #000;
+  margin-bottom: 12px;
+}
+
+.rehab-video iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.rehab-steps {
+  margin: 0;
+  padding-left: 22px;
+  line-height: 1.9;
+}
+
+.rehab-reps {
+  margin: 10px 0 4px;
+  font-weight: 700;
+  color: var(--primary-strong);
+}
+
+.rehab-caution {
+  margin: 0;
+  font-size: 14px;
+  color: #92400e;
+}
