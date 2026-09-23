@@ -30,7 +30,7 @@ client = TestClient(app_module.app)
 
 TEST_ID_NUMBER = "A199999999"
 TEST_NAME = "測試病患_請忽略"
-TEST_SLOT = "2099-01-01 早上 09:00 - 12:00"
+TEST_SLOT = "2099-01-05 早上 09:00 - 12:00"  # 2099-01-05 是星期一，符合高醫師的固定班表（一/三/五 早上、下午）
 TEST_DOCTOR = "高醫師"
 TEST_DEPARTMENT = "脊椎外科"
 
@@ -175,7 +175,11 @@ def main():
         )
 
         # 7. 後台登入失敗次數限制（連續錯誤達上限後應鎖定，回傳 429）
-        lockout_username = "smoke_test_不存在的帳號"
+        # 這裡刻意用純英數字帳號：HTTP Basic Auth 的帳密規範上要編碼成 ASCII/Latin-1，
+        # 若帳號含中文字，不同版本的 httpx 在編碼 Authorization 標頭時行為可能不一致，
+        # 可能導致請求在還沒進到 verify_admin 前就被 FastAPI 的 HTTPBasic 攔截、
+        # 根本沒有真正執行到失敗次數計算，讓這項測試失去意義。
+        lockout_username = "smoke_test_nonexistent_user"
         app_module._failed_login_attempts.pop(lockout_username, None)
         last_status = None
         for _ in range(app_module.MAX_LOGIN_ATTEMPTS):

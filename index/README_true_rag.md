@@ -118,10 +118,50 @@ python smoke_test.py
 { "id_number": "A123456789" }
 ```
 
+### 查詢某科別未來 7 天班表（含剩餘名額）
+`GET /api/schedule/department/{department}?days=7`
+
+回傳該科別所有擅長醫師，未來 N 天（預設 7 天）每天有開的時段與目前剩餘名額，前端的
+「自行選擇醫師／科別」與「改期」畫面都是呼叫這支 API 畫出班表格子。
+
+### AI 自動安排最接近的門診時段
+`GET /api/schedule/next-available?department=脊椎外科&doctor=高醫師`（`doctor` 選填）
+
+依「現在時間」往後找，跳過已經開始或已額滿的時段，回傳該科別（或指定醫師）最快
+可以掛上的一個時段。AI 問診分流完成、或使用者直接講出科別／醫師名稱時，前端都是
+呼叫這支 API 取得建議時段，不是在前端寫死。
+
 ### 後台掛號總覽（HTML 網頁，需 HTTP Basic 登入）
 `GET /api/admin/all_bookings`
 
-## 10. 架構
+## 10. 醫師班表資料怎麼調整
+
+醫師的擅長科別與每週固定看診時段都寫在 `app.py` 的 `DOCTORS`：
+
+```python
+DOCTORS = {
+    "高醫師": {"departments": ["脊椎外科"], "weekly": {0: ["早上", "下午"], 2: ["早上", "下午"], 4: ["早上", "下午"]}},
+    ...
+}
+```
+
+`weekly` 的 key 是星期幾（0=一…6=日），value 是當天有看診的時段代碼。一位醫師可以有
+多個擅長科別（例如 `"王醫師": {"departments": ["足踝外科", "運動醫學科"], ...}`）。
+
+如果某天要請假、代診或臨時加開，不用改整週的班表，在 `DOCTOR_SCHEDULE_OVERRIDES`
+加一筆例外就好，會蓋掉當天原本的固定班表：
+
+```python
+DOCTOR_SCHEDULE_OVERRIDES = {
+    ("高醫師", "2026-09-21"): [],                       # 高醫師當天請假，完全不看診
+    ("謝醫師", "2026-09-21"): ["早上", "下午", "晚上"],  # 謝醫師當天代診，加開全天
+}
+```
+
+改完 `DOCTORS` 或 `DOCTOR_SCHEDULE_OVERRIDES` 後，重新啟動 `uvicorn app:app --reload`
+就會套用新班表（`--reload` 模式下存檔就會自動套用，不用重啟）。
+
+## 11. 架構
 
 - Frontend: 骨科問診 UI（React, CDN 版）+ API 呼叫
 - RAG Embedding: `TfidfVectorizer`（本地 SQLite 向量庫，僅供醫療知識檢索，非病人個資）

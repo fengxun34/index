@@ -34,6 +34,7 @@ app.add_middleware(
 ALLOWED_DEPARTMENTS = [
     "脊椎外科", "運動醫學科", "關節重建科", "手外科",
     "足踝外科", "骨折創傷科", "骨質疏鬆症門診",
+    "兒童骨科", "骨骼腫瘤科", "高壓氧治療中心",
 ]
 
 # 每個看診時段最多可掛號人數
@@ -107,21 +108,90 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "vector_store.db")
 PKL_PATH = os.path.join(BASE_DIR, "vectorizer.pkl")
 
-# 骨科次專科看診時段設定（用於驗證掛號時段是否合法）
-DEFAULT_SLOTS = ["早上 09:00 - 12:00", "下午 03:00 - 05:00", "晚上 06:00 - 09:00"]
-DOCTOR_SCHEDULES = {
-    "高醫師": ["早上 09:00 - 12:00", "下午 03:00 - 05:00"],   # 脊椎外科
-    "謝醫師": ["下午 03:00 - 05:00", "晚上 06:00 - 09:00"],   # 脊椎外科
-    "曾醫師": ["早上 09:00 - 12:00", "晚上 06:00 - 09:00"],   # 運動醫學科
-    "蔡醫師": ["下午 03:00 - 05:00"],                          # 運動醫學科
-    "林醫師": ["早上 09:00 - 12:00", "下午 03:00 - 05:00"],   # 關節重建科
-    "鍾醫師": ["晚上 06:00 - 09:00"],                          # 關節重建科
-    "張醫師": ["早上 09:00 - 12:00"],                          # 手外科
-    "王醫師": ["下午 03:00 - 05:00", "晚上 06:00 - 09:00"],   # 足踝外科
-    "陳醫師": ["早上 09:00 - 12:00"],                          # 骨折創傷科
-    "徐醫師": ["晚上 06:00 - 09:00"],                          # 骨折創傷科
-    "吳醫師": ["早上 09:00 - 12:00", "下午 03:00 - 05:00"],   # 骨質疏鬆症門診
+# ===== 醫師資料（擅長科別可複選 + 每週固定看診時段） =====
+# weekly 的 key 是星期幾（0=一, 1=二, 2=三, 3=四, 4=五, 5=六, 6=日），
+# value 是當天有看診的時段代碼列表，取值只能是 "早上"／"下午"／"晚上"。
+# 一位醫師可以有多個擅長科別（departments 是列表）。
+DOCTORS = {
+    "高醫師": {"departments": ["脊椎外科"], "weekly": {0: ["早上", "下午"], 2: ["早上", "下午"], 4: ["早上", "下午"]}},
+    "謝醫師": {"departments": ["脊椎外科"], "weekly": {1: ["下午", "晚上"], 3: ["下午", "晚上"]}},
+    "曾醫師": {"departments": ["運動醫學科"], "weekly": {0: ["早上", "晚上"], 3: ["早上", "晚上"]}},
+    "蔡醫師": {"departments": ["運動醫學科"], "weekly": {2: ["下午"], 4: ["下午"]}},
+    "林醫師": {"departments": ["關節重建科", "骨質疏鬆症門診"], "weekly": {1: ["早上", "下午"], 3: ["早上", "下午"], 5: ["早上"]}},
+    "鍾醫師": {"departments": ["關節重建科"], "weekly": {0: ["晚上"], 2: ["晚上"]}},
+    "張醫師": {"departments": ["手外科"], "weekly": {0: ["早上"], 1: ["早上"], 2: ["早上"], 3: ["早上"], 4: ["早上"]}},
+    "王醫師": {"departments": ["足踝外科", "運動醫學科"], "weekly": {1: ["下午", "晚上"], 3: ["下午", "晚上"], 5: ["下午"]}},
+    "陳醫師": {"departments": ["骨折創傷科", "兒童骨科"], "weekly": {0: ["早上"], 2: ["早上"], 4: ["早上"]}},
+    "徐醫師": {"departments": ["骨折創傷科"], "weekly": {1: ["晚上"], 3: ["晚上"], 5: ["晚上"]}},
+    "吳醫師": {"departments": ["骨質疏鬆症門診"], "weekly": {0: ["早上", "下午"], 3: ["早上", "下午"]}},
+    "周醫師": {"departments": ["兒童骨科"], "weekly": {1: ["早上", "下午"], 4: ["早上", "下午"]}},
+    "楊醫師": {"departments": ["骨骼腫瘤科"], "weekly": {2: ["下午", "晚上"], 5: ["下午", "晚上"]}},
+    "洪醫師": {"departments": ["高壓氧治療中心"], "weekly": {0: ["早上", "晚上"], 3: ["早上", "晚上"]}},
 }
+
+# 醫師班表「例外」調整（請假／代診／臨時加開）。
+# key 是 (醫師姓名, "YYYY-MM-DD")，value 是當天實際有看診的時段列表，
+# 會覆蓋掉 DOCTORS 裡該醫師原本每週固定的班表。value 給空list [] 代表當天請假、完全不看診。
+# 範例：
+#   ("高醫師", "2026-09-21"): [],                     # 高醫師當天請假
+#   ("高醫師", "2026-09-21"): ["早上", "下午", "晚上"], # 當天加開晚診
+DOCTOR_SCHEDULE_OVERRIDES = {}
+
+# 時段代碼 <-> 完整時段字串的對照（跟前端 index.html 的 timeSlots 保持一致）
+SESSION_TIME_MAP = {
+    "早上": "早上 09:00 - 12:00",
+    "下午": "下午 03:00 - 05:00",
+    "晚上": "晚上 06:00 - 09:00",
+}
+SESSION_BY_TIME_SLOT = {v: k for k, v in SESSION_TIME_MAP.items()}
+SESSION_ORDER = ["早上", "下午", "晚上"]
+SESSION_START_HOUR = {"早上": 9, "下午": 15, "晚上": 18}  # 用來判斷「今天」這個時段是否已經開始，開始了就不再排進今天
+WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"]
+
+DEFAULT_SLOTS = list(SESSION_TIME_MAP.values())
+
+
+def get_doctor_sessions(doctor: str, date_obj) -> list:
+    """回傳某醫師在某一天實際有看診的時段代碼列表（優先看例外調整，沒有例外才用每週固定班表）。"""
+    override_key = (doctor, date_obj.isoformat())
+    if override_key in DOCTOR_SCHEDULE_OVERRIDES:
+        return DOCTOR_SCHEDULE_OVERRIDES[override_key]
+    info = DOCTORS.get(doctor)
+    if not info:
+        return []
+    return info["weekly"].get(date_obj.weekday(), [])
+
+
+def get_doctors_by_department(department: str) -> list:
+    """回傳擅長科別包含該科的所有醫師（依 DOCTORS 定義順序）。"""
+    return [name for name, info in DOCTORS.items() if department in info["departments"]]
+
+
+def is_session_bookable_now(date_obj, session: str, now: datetime) -> bool:
+    """今天以外的日期一律可掛；今天的時段如果已經開始看診，就不再提供掛號。"""
+    if date_obj != now.date():
+        return True
+    start_hour = SESSION_START_HOUR.get(session, 0)
+    return now.hour < start_hour
+
+
+def get_capacity_map(doctors: list, date_from, date_to) -> dict:
+    """一次查詢範圍內所有醫師的已掛號數，回傳 {(doctor, date_str, time_slot): 已掛號人數}，避免逐格查詢資料庫。"""
+    if supabase is None or not doctors:
+        return {}
+    res = (
+        supabase.table("appointments")
+        .select("doctor, appointment_date, time_slot")
+        .in_("doctor", doctors)
+        .gte("appointment_date", date_from.isoformat())
+        .lte("appointment_date", date_to.isoformat())
+        .eq("status", "confirmed")
+        .execute()
+    )
+    counts = defaultdict(int)
+    for row in (res.data or []):
+        counts[(row["doctor"], row["appointment_date"], row["time_slot"])] += 1
+    return counts
 
 def load_sql_data():
     try:
@@ -255,15 +325,116 @@ def rag_answer(req: AnswerRequest):
         "retrieved_chunks": hits
     }
 
+@app.get("/api/schedule/department/{department}")
+def get_department_schedule(department: str, days: int = 7):
+    """回傳某科別未來 N 天（預設 7 天）的醫師班表，含每個時段目前剩餘可掛號名額。"""
+    if department not in ALLOWED_DEPARTMENTS:
+        raise HTTPException(status_code=400, detail=f"科別不正確：{department}")
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+
+    doctors = get_doctors_by_department(department)
+    if not doctors:
+        return {"status": "success", "department": department, "doctors": [], "days": []}
+
+    now = datetime.now()
+    today = now.date()
+    date_from = today
+    date_to = today + timedelta(days=days - 1)
+    capacity = get_capacity_map(doctors, date_from, date_to)
+
+    result_days = []
+    for offset in range(days):
+        check_date = today + timedelta(days=offset)
+        date_str = check_date.isoformat()
+        slots = []
+        for doc in doctors:
+            for session in get_doctor_sessions(doc, check_date):
+                if not is_session_bookable_now(check_date, session, now):
+                    continue
+                time_slot = SESSION_TIME_MAP[session]
+                used = capacity.get((doc, date_str, time_slot), 0)
+                slots.append({
+                    "doctor": doc,
+                    "session": session,
+                    "time_slot": time_slot,
+                    "remaining": max(MAX_PATIENTS_PER_SLOT - used, 0),
+                    "full": used >= MAX_PATIENTS_PER_SLOT,
+                })
+        result_days.append({
+            "date": date_str,
+            "weekday": WEEKDAY_LABELS[check_date.weekday()],
+            "slots": slots,
+        })
+
+    return {"status": "success", "department": department, "doctors": doctors, "days": result_days}
+
+
+@app.get("/api/schedule/next-available")
+def get_next_available_slot(department: str, doctor: Optional[str] = None, days: int = 30):
+    """AI 自動安排門診用：找出某科別（可選指定醫師）最接近現在、且還有名額的時段。"""
+    if department not in ALLOWED_DEPARTMENTS:
+        raise HTTPException(status_code=400, detail=f"科別不正確：{department}")
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+
+    candidates = [doctor] if doctor else get_doctors_by_department(department)
+    candidates = [d for d in candidates if d in DOCTORS and department in DOCTORS[d]["departments"]]
+    if not candidates:
+        return {"status": "error", "message": f"{department} 目前查無可掛號醫師"}
+
+    now = datetime.now()
+    today = now.date()
+    date_to = today + timedelta(days=days - 1)
+    capacity = get_capacity_map(candidates, today, date_to)
+
+    for offset in range(days):
+        check_date = today + timedelta(days=offset)
+        date_str = check_date.isoformat()
+        for session in SESSION_ORDER:
+            if not is_session_bookable_now(check_date, session, now):
+                continue
+            for doc in candidates:
+                if session not in get_doctor_sessions(doc, check_date):
+                    continue
+                time_slot = SESSION_TIME_MAP[session]
+                used = capacity.get((doc, date_str, time_slot), 0)
+                if used < MAX_PATIENTS_PER_SLOT:
+                    return {
+                        "status": "success",
+                        "department": department,
+                        "doctor": doc,
+                        "date": date_str,
+                        "session": session,
+                        "time_slot": time_slot,
+                        "slot": f"{date_str} {time_slot}",
+                        "remaining": MAX_PATIENTS_PER_SLOT - used,
+                    }
+
+    return {"status": "error", "message": f"{department} 未來{days}天內查無可掛號時段，請聯絡診所。"}
+
+
 @app.post("/api/booking/confirm")
 def confirm_booking(req: BookingRequest):
     if supabase is None:
         return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
 
-    allowed_slots = DOCTOR_SCHEDULES.get(req.doctor, DEFAULT_SLOTS)
-    is_valid_slot = any(valid_time in req.slot for valid_time in allowed_slots)
-    if not is_valid_slot:
-        return {"status": "error", "message": f"驗證失敗：{req.doctor} 在該時段沒有看診！"}
+    doctor_info = DOCTORS.get(req.doctor)
+    if not doctor_info:
+        return {"status": "error", "message": f"查無此醫師：{req.doctor}"}
+    if req.department not in doctor_info["departments"]:
+        return {"status": "error", "message": f"{req.doctor} 並非{req.department}的醫師"}
+
+    appointment_date, time_slot = (req.slot.split(" ", 1) + [""])[:2]
+    time_slot = time_slot or req.slot
+    try:
+        appt_date_obj = datetime.strptime(appointment_date, "%Y-%m-%d").date()
+    except ValueError:
+        return {"status": "error", "message": "掛號時段格式不正確"}
+
+    session = SESSION_BY_TIME_SLOT.get(time_slot)
+    if session is None or session not in get_doctor_sessions(req.doctor, appt_date_obj):
+        return {"status": "error", "message": f"驗證失敗：{req.doctor} 在 {appointment_date} 沒有看診！"}
 
     try:
         id_number = req.id_number.upper()
@@ -280,9 +451,6 @@ def confirm_booking(req: BookingRequest):
             on_conflict="id_number"
         ).execute()
         patient_id = patient_res.data[0]["id"]
-
-        appointment_date, time_slot = (req.slot.split(" ", 1) + [""])[:2]
-        time_slot = time_slot or req.slot
 
         # 用資料庫端的原子操作（advisory lock）檢查容額並新增掛號，避免高併發下
         # 「先查詢再新增」這兩步不同交易，導致容額上限被打破（見 sql/003_atomic_slot_capacity.sql）
@@ -414,13 +582,16 @@ def reschedule_booking(req: RescheduleRequest):
             return {"status": "error", "message": "此掛號目前狀態無法改期。"}
 
         doctor = appt["doctor"]
-        allowed_slots = DOCTOR_SCHEDULES.get(doctor, DEFAULT_SLOTS)
-        is_valid_slot = any(valid_time in req.new_slot for valid_time in allowed_slots)
-        if not is_valid_slot:
-            return {"status": "error", "message": f"驗證失敗：{doctor} 在該時段沒有看診！"}
-
         new_date, new_time_slot = (req.new_slot.split(" ", 1) + [""])[:2]
         new_time_slot = new_time_slot or req.new_slot
+        try:
+            new_date_obj = datetime.strptime(new_date, "%Y-%m-%d").date()
+        except ValueError:
+            return {"status": "error", "message": "新的時段格式不正確"}
+
+        new_session = SESSION_BY_TIME_SLOT.get(new_time_slot)
+        if new_session is None or new_session not in get_doctor_sessions(doctor, new_date_obj):
+            return {"status": "error", "message": f"驗證失敗：{doctor} 在該時段沒有看診！"}
 
         existing = (
             supabase.table("appointments")
