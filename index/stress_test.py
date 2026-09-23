@@ -33,7 +33,7 @@ client = TestClient(app_module.app)
 TEST_ID_PREFIX = "A29"
 TEST_DOCTOR = "高醫師"
 TEST_DEPARTMENT = "脊椎外科"
-TEST_SLOT = "2099-02-01 早上 09:00 - 12:00"
+TEST_SLOT = "2099-02-02 早上 09:00 - 12:00"  # 2099-02-02 是星期一，符合高醫師的固定班表（一/三/五 早上、下午）
 
 CONCURRENT_BOOKING_REQUESTS = 20  # 遠大於容額上限，刻意製造搶位情境
 THROUGHPUT_REQUESTS = 50

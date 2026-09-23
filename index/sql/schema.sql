@@ -29,7 +29,8 @@ create table if not exists appointments (
     patient_id uuid not null references patients(id) on delete cascade,
     department text not null check (department in (
         '脊椎外科', '運動醫學科', '關節重建科', '手外科',
-        '足踝外科', '骨折創傷科', '骨質疏鬆症門診'
+        '足踝外科', '骨折創傷科', '骨質疏鬆症門診',
+        '兒童骨科', '骨骼腫瘤科', '高壓氧治療中心'
     )),
     doctor text not null,
     appointment_date date not null,

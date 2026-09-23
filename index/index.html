@@ -40,32 +40,48 @@
       { keywords: ["牙齒痛", "蛀牙", "牙齦腫"], dept: "牙科" }
     ];
 
-    // 骨科次專科（依評審意見，POC 範圍聚焦骨科，其他科別留待後續擴增）
-    const doctorsByDept = {
-      脊椎外科: ["高醫師", "謝醫師"],
-      運動醫學科: ["曾醫師", "蔡醫師"],
-      關節重建科: ["林醫師", "鍾醫師"],
-      手外科: ["張醫師"],
-      足踝外科: ["王醫師"],
-      骨折創傷科: ["陳醫師", "徐醫師"],
-      骨質疏鬆症門診: ["吳醫師"]
+    const API_BASE = "http://127.0.0.1:8000";
+
+    // 骨科次專科清單（要跟 app.py 的 ALLOWED_DEPARTMENTS 保持一致）
+    const DEPARTMENTS = [
+      "脊椎外科", "運動醫學科", "關節重建科", "手外科", "足踝外科",
+      "骨折創傷科", "骨質疏鬆症門診", "兒童骨科", "骨骼腫瘤科", "高壓氧治療中心"
+    ];
+
+    // 醫師⇄科別對照（僅用於「使用者直接講出醫師或科別名稱」時的文字比對，
+    // 一位醫師可以有多個擅長科別；實際班表與剩餘名額一律即時向後端查詢，不在前端寫死）
+    const DOCTOR_DEPARTMENTS = {
+      "高醫師": ["脊椎外科"],
+      "謝醫師": ["脊椎外科"],
+      "曾醫師": ["運動醫學科"],
+      "蔡醫師": ["運動醫學科"],
+      "林醫師": ["關節重建科", "骨質疏鬆症門診"],
+      "鍾醫師": ["關節重建科"],
+      "張醫師": ["手外科"],
+      "王醫師": ["足踝外科", "運動醫學科"],
+      "陳醫師": ["骨折創傷科", "兒童骨科"],
+      "徐醫師": ["骨折創傷科"],
+      "吳醫師": ["骨質疏鬆症門診"],
+      "周醫師": ["兒童骨科"],
+      "楊醫師": ["骨骼腫瘤科"],
+      "洪醫師": ["高壓氧治療中心"]
     };
 
     const timeSlots = ["早上 09:00 - 12:00", "下午 03:00 - 05:00", "晚上 06:00 - 09:00"];
 
-    const doctorSchedules = {
-      "高醫師": ["早上 09:00 - 12:00", "下午 03:00 - 05:00"],
-      "謝醫師": ["下午 03:00 - 05:00", "晚上 06:00 - 09:00"],
-      "曾醫師": ["早上 09:00 - 12:00", "晚上 06:00 - 09:00"],
-      "蔡醫師": ["下午 03:00 - 05:00"],
-      "林醫師": ["早上 09:00 - 12:00", "下午 03:00 - 05:00"],
-      "鍾醫師": ["晚上 06:00 - 09:00"],
-      "張醫師": ["早上 09:00 - 12:00"],
-      "王醫師": ["下午 03:00 - 05:00", "晚上 06:00 - 09:00"],
-      "陳醫師": ["早上 09:00 - 12:00"],
-      "徐醫師": ["晚上 06:00 - 09:00"],
-      "吳醫師": ["早上 09:00 - 12:00", "下午 03:00 - 05:00"]
-    };
+    // 向後端查詢：某科別未來 7 天（含今天）的醫師班表與剩餘名額
+    async function fetchDepartmentSchedule(department, days = 7) {
+      const res = await fetch(`${API_BASE}/api/schedule/department/${encodeURIComponent(department)}?days=${days}`);
+      return res.json();
+    }
+
+    // 向後端查詢：AI 自動安排——某科別（可指定醫師）最接近現在、還有名額的門診時段
+    async function fetchNextAvailable(department, doctor) {
+      const params = new URLSearchParams({ department });
+      if (doctor) params.set("doctor", doctor);
+      const res = await fetch(`${API_BASE}/api/schedule/next-available?${params.toString()}`);
+      return res.json();
+    }
 
     // 骨科常見部位問診腳本
     const symptomDB = {
@@ -78,6 +94,20 @@
         { key: "pain", q: "請問是痠痛、悶痛，還是劇烈刺痛？" },
         { key: "radiate", q: "疼痛是否延伸到臀部或腿部，合併麻木感？" },
         { key: "duration", q: "已經持續多久了？" }
+      ] },
+      兒童: { questions: [
+        { key: "childAge", q: "請問是幾歲的小朋友？主要哪個部位不舒服？" },
+        { key: "childCause", q: "是因為跌倒受傷、運動傷害，還是走路姿勢／腿型異常被發現的？" },
+        { key: "duration", q: "這個情況注意到多久了？" }
+      ] },
+      腫瘤: { questions: [
+        { key: "lump", q: "是否有摸到腫塊？大小、位置在哪裡？" },
+        { key: "growth", q: "腫塊是否持續變大，或合併疼痛、體重下降？" },
+        { key: "duration", q: "已經持續多久了？" }
+      ] },
+      高壓氧: { questions: [
+        { key: "condition", q: "請問是慢性傷口／骨髓炎，還是一氧化碳中毒或放射治療後的問題？" },
+        { key: "duration", q: "這個狀況已經持續多久了？" }
       ] },
       肩關節: { questions: [
         { key: "pain", q: "請問是抬手時痛、夜間痛，還是有卡住的感覺？" },
@@ -222,13 +252,15 @@
 
       const [patientInfo, setPatientInfo] = useState({ name: "", idNumber: "", birth: "", phone: "" });
 
-      const [booking, setBooking] = useState({
-        department: "脊椎外科",
-        doctor: "高醫師",
-        date: new Date().toISOString().split('T')[0],
-        slot: timeSlots[0]
-      });
+      const [booking, setBooking] = useState({ department: "", doctor: "", date: "", slot: "" });
+      const [preferredDoctor, setPreferredDoctor] = useState(null);
+      const [aiAssignLoading, setAiAssignLoading] = useState(false);
+      const [aiAssignError, setAiAssignError] = useState("");
       const [showBookingEdit, setShowBookingEdit] = useState(false);
+      const [editDept, setEditDept] = useState("");
+      const [deptSchedule, setDeptSchedule] = useState(null);
+      const [deptScheduleLoading, setDeptScheduleLoading] = useState(false);
+      const [deptScheduleError, setDeptScheduleError] = useState("");
       const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
 
       const [recordingPatientInfo, setRecordingPatientInfo] = useState(false);
@@ -244,8 +276,11 @@
       const [isSearching, setIsSearching] = useState(false);
       const [actionLoading, setActionLoading] = useState(null);
       const [rescheduleTarget, setRescheduleTarget] = useState(null);
-      const [rescheduleDate, setRescheduleDate] = useState(new Date().toISOString().split('T')[0]);
+      const [rescheduleDate, setRescheduleDate] = useState("");
       const [rescheduleSlot, setRescheduleSlot] = useState("");
+      const [rescheduleSchedule, setRescheduleSchedule] = useState(null);
+      const [rescheduleScheduleLoading, setRescheduleScheduleLoading] = useState(false);
+      const [rescheduleScheduleError, setRescheduleScheduleError] = useState("");
 
       const recognitionRef = useRef(null);
       const textInputRef = useRef(null);
@@ -256,19 +291,66 @@
         latestRef.current = { state, bodyPart, qaStep, answers, chatHistory };
       }, [state, bodyPart, qaStep, answers, chatHistory]);
 
+      // AI 自動安排門診：進入 RESULT 畫面時，向後端查詢「最接近現在時間、還有名額」的門診時段，
+      // 若使用者是直接指名某位醫師（preferredDoctor），就只在該醫師的班表裡找；
+      // 否則讓後端在整個科別的醫師裡找最快的一個（額滿會自動跳下一個時段）。
       useEffect(() => {
-        if (state === STATES.RESULT && result.length > 0) {
-          const topDept = Array.isArray(result[0]) ? result[0][0] : result[0];
-          const topDoc = doctorsByDept[topDept] ? doctorsByDept[topDept][0] : "";
-          const availableSlots = doctorSchedules[topDoc] || timeSlots;
-          setBooking({
-            department: topDept,
-            doctor: topDoc,
-            date: new Date().toISOString().split('T')[0],
-            slot: availableSlots[0]
+        if (state !== STATES.RESULT || result.length === 0) return;
+        const topDept = Array.isArray(result[0]) ? result[0][0] : result[0];
+        let cancelled = false;
+        setAiAssignLoading(true);
+        setAiAssignError("");
+        fetchNextAvailable(topDept, preferredDoctor)
+          .then((data) => {
+            if (cancelled) return;
+            if (data.status === "success") {
+              setBooking({ department: data.department, doctor: data.doctor, date: data.date, slot: data.time_slot });
+            } else {
+              // 查詢失敗也先把科別記下來，這樣使用者點「自己選」時，班表預設會開在正確的科別
+              setBooking({ department: topDept, doctor: "", date: "", slot: "" });
+              setAiAssignError(data.message || "目前查無可掛號時段，請改為自行選擇。");
+            }
+          })
+          .catch(() => {
+            if (!cancelled) {
+              setBooking({ department: topDept, doctor: "", date: "", slot: "" });
+              setAiAssignError("查詢門診時段失敗，請確認後端（uvicorn）是否已啟動。");
+            }
+          })
+          .finally(() => {
+            if (!cancelled) setAiAssignLoading(false);
           });
-        }
-      }, [state, result]);
+        return () => { cancelled = true; };
+      }, [state, result, preferredDoctor]);
+
+      // 掛號摘要進入「自行選擇」模式時，向後端查詢該科別未來 7 天的完整班表
+      useEffect(() => {
+        if (!showBookingEdit) return;
+        const dept = editDept || booking.department || DEPARTMENTS[0];
+        setEditDept(dept);
+        let cancelled = false;
+        setDeptScheduleLoading(true);
+        setDeptScheduleError("");
+        setDeptSchedule(null);
+        fetchDepartmentSchedule(dept)
+          .then((data) => {
+            if (cancelled) return;
+            if (data.status === "success") setDeptSchedule(data);
+            else setDeptScheduleError(data.message || "查詢班表失敗");
+          })
+          .catch(() => {
+            if (!cancelled) setDeptScheduleError("查詢班表失敗，請確認後端（uvicorn）是否已啟動。");
+          })
+          .finally(() => {
+            if (!cancelled) setDeptScheduleLoading(false);
+          });
+        return () => { cancelled = true; };
+      }, [showBookingEdit, editDept]);
+
+      function pickScheduleSlot(doctor, date, timeSlotStr) {
+        setBooking({ department: editDept, doctor, date, slot: timeSlotStr });
+        setShowBookingEdit(false);
+      }
 
       function speak(message) {
         if (!window.speechSynthesis) return;
@@ -308,29 +390,6 @@
       }
 
       function stopRecord() { setRecording(false); }
-
-      function handleBookingChange(e) {
-        const { name, value } = e.target;
-        setBooking((prev) => {
-          const updated = { ...prev, [name]: value };
-
-          let targetDoctor = updated.doctor;
-
-          if (name === "department") {
-            targetDoctor = doctorsByDept[value] ? doctorsByDept[value][0] : "";
-            updated.doctor = targetDoctor;
-          }
-
-          if (name === "department" || name === "doctor") {
-            const availableSlots = doctorSchedules[targetDoctor] || timeSlots;
-            if (!availableSlots.includes(updated.slot)) {
-              updated.slot = availableSlots[0];
-            }
-          }
-
-          return updated;
-        });
-      }
 
       function startPatientInfoRecord() {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -392,6 +451,9 @@
       }
 
       function detectPart(content) {
+        if (content.includes("小孩") || content.includes("兒童") || content.includes("小朋友") || content.includes("O型腿") || content.includes("X型腿") || content.includes("扁平足") || content.includes("斜頸") || content.includes("生長痛")) return "兒童";
+        if (content.includes("腫塊") || content.includes("腫瘤") || content.includes("骨癌") || content.includes("骨髓炎")) return "腫瘤";
+        if (content.includes("高壓氧") || content.includes("一氧化碳中毒") || content.includes("放射性骨壞死")) return "高壓氧";
         if (content.includes("脖子") || content.includes("頸") || content.includes("落枕")) return "頸椎";
         if (content.includes("腰") || content.includes("下背") || content.includes("坐骨神經")) return "腰椎";
         if (content.includes("肩") || content.includes("五十肩")) return "肩關節";
@@ -429,20 +491,22 @@
         if (t.includes("膝") || t.includes("退化性關節炎")) return true;
         if (t.includes("腳踝") || t.includes("足底") || t.includes("腳跟")) return true;
         if (t.includes("骨折") || t.includes("車禍") || t.includes("跌倒") || t.includes("外傷") || t.includes("撞擊")) return true;
+        if (t.includes("小孩") || t.includes("兒童") || t.includes("小朋友") || t.includes("O型腿") || t.includes("X型腿") || t.includes("扁平足") || t.includes("斜頸") || t.includes("生長痛")) return true;
+        if (t.includes("腫塊") || t.includes("腫瘤") || t.includes("骨癌") || t.includes("骨髓炎")) return true;
+        if (t.includes("高壓氧") || t.includes("一氧化碳中毒") || t.includes("放射性骨壞死")) return true;
         return /(不舒服|難受|好痛|很痛|刺痛|悶痛|脹痛|酸痛|痠痛|麻|無力|腫脹|卡住|變形|瘀青)/.test(t);
       }
 
-      // 直接說出「科別」或「醫師姓名」時，跳過問診直接帶出該門診（比照長庚可指定醫師掛號的做法）
+      // 直接說出「科別」或「醫師姓名」時，跳過問診直接帶出該門診（比照長庚可指定醫師掛號的做法）。
+      // 只指名醫師時用該醫師的第一個擅長科別；只指名科別時 doctor 給 null，交給後端在整科找最快的醫師。
       function detectDoctorMention(content) {
         const t = (content || "").trim();
         if (!t) return null;
-        for (const [dept, doctors] of Object.entries(doctorsByDept)) {
-          for (const doc of doctors) {
-            if (t.includes(doc)) return { department: dept, doctor: doc };
-          }
+        for (const [doc, depts] of Object.entries(DOCTOR_DEPARTMENTS)) {
+          if (t.includes(doc)) return { department: depts[0], doctor: doc };
         }
-        for (const dept of Object.keys(doctorsByDept)) {
-          if (t.includes(dept)) return { department: dept, doctor: doctorsByDept[dept][0] };
+        for (const dept of DEPARTMENTS) {
+          if (t.includes(dept)) return { department: dept, doctor: null };
         }
         return null;
       }
@@ -472,13 +536,17 @@
         if (/(高燒不退|發黑麻木)/.test(joined)) {
           return "偵測到較危急症狀，建議盡快就醫，必要時前往急診。";
         }
+        if (part === "高壓氧" && /(意識不清|呼吸困難)/.test(joined)) {
+          return "偵測到可能的一氧化碳中毒急症（意識不清、呼吸困難），請立即撥打119或前往急診。";
+        }
         return "";
       }
 
       function calculate(part, ans) {
         const score = {
           脊椎外科: 30, 運動醫學科: 30, 關節重建科: 30, 手外科: 25,
-          足踝外科: 25, 骨折創傷科: 25, 骨質疏鬆症門診: 20
+          足踝外科: 25, 骨折創傷科: 25, 骨質疏鬆症門診: 20,
+          兒童骨科: 20, 骨骼腫瘤科: 20, 高壓氧治療中心: 15
         };
         const joined = Object.values(ans).join(" ");
         if (part === "頸椎") {
@@ -517,6 +585,17 @@
           score["骨折創傷科"] += 40;
           if (/變形|傷口|骨頭外露/.test(joined)) score["骨折創傷科"] += 20;
         }
+        if (part === "兒童") {
+          score["兒童骨科"] += 45;
+          if (/跌倒|運動|受傷/.test(joined)) score["骨折創傷科"] += 10;
+        }
+        if (part === "腫瘤") {
+          score["骨骼腫瘤科"] += 45;
+          if (/變大|體重下降|疼痛/.test(joined)) score["骨骼腫瘤科"] += 15;
+        }
+        if (part === "高壓氧") {
+          score["高壓氧治療中心"] += 45;
+        }
         if (part === "未明") {
           score["脊椎外科"] += 10; score["關節重建科"] += 10; score["運動醫學科"] += 10;
           if (/腰|背/.test(joined)) score["脊椎外科"] += 15;
@@ -529,7 +608,7 @@
       async function callRAG(question, metadata = {}) {
         setRagLoading(true); setRagError(""); setRagAnswer(""); setRagChunks([]);
         try {
-          const res = await fetch("http://127.0.0.1:8000/rag/answer", {
+          const res = await fetch(`${API_BASE}/rag/answer`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ question, top_k: 3, metadata })
           });
@@ -563,10 +642,11 @@
 
       function applyDirectDoctorSelection({ department, doctor }) {
         setExternalHint("");
-        const availableSlots = doctorSchedules[doctor] || timeSlots;
+        setPreferredDoctor(doctor || null);
         setResult([[department, 100]]);
-        setBooking((prev) => ({ ...prev, department, doctor, slot: availableSlots[0] }));
-        const msg = `已為您找到 ${doctor}（${department}）的門診，請確認安排`;
+        const msg = doctor
+          ? `正在為您查詢 ${doctor}（${department}）最接近的門診時段...`
+          : `正在為您查詢 ${department} 最接近的門診時段...`;
         setPrompt(msg); speak(msg);
         setState(STATES.RESULT);
       }
@@ -587,8 +667,10 @@
         setNonOrthoDept(""); setNonOrthoText("");
         setIsDirectBooking(false);
         setPatientInfo({ name: "", idNumber: "", birth: "", phone: "" });
-        setBooking({ department: "脊椎外科", doctor: "高醫師", date: new Date().toISOString().split('T')[0], slot: timeSlots[0] });
-        setShowBookingEdit(false); setIsSubmittingBooking(false);
+        setBooking({ department: "", doctor: "", date: "", slot: "" });
+        setPreferredDoctor(null); setAiAssignLoading(false); setAiAssignError("");
+        setShowBookingEdit(false); setEditDept(""); setDeptSchedule(null);
+        setDeptScheduleLoading(false); setDeptScheduleError(""); setIsSubmittingBooking(false);
         setRecordingPatientInfo(false); setPatientVoiceNeedsReview(false);
         setLastPatientVoiceTranscript(""); setRagLoading(false); setRagError("");
         setRagAnswer(""); setRagChunks([]); setChatHistory([]); setExternalHint("");
@@ -597,8 +679,10 @@
 
       function startDirectBooking() {
         setIsDirectBooking(true);
-        setPrompt("請填寫掛號基本資料以利直接預約骨科門診");
-        speak("已為您切換至直接掛號流程，請輸入您的基本資料");
+        setBooking({ department: "", doctor: "", date: "", slot: "" });
+        setEditDept(""); setDeptSchedule(null); setShowBookingEdit(true);
+        setPrompt("請選擇骨科次專科，查看未來 7 天的醫師班表");
+        speak("已為您切換至直接掛號流程，請先選擇科別");
         setState(STATES.PATIENT_INFO);
       }
 
@@ -664,10 +748,8 @@
             const calculated = calculate(bp, newAnswers);
             const topDept = calculated[0][0];
             setResult(calculated);
-            const topDoc = doctorsByDept[topDept][0];
-            const available = doctorSchedules[topDoc] || timeSlots;
-            setBooking(prev => ({ ...prev, department: topDept, doctor: topDoc, slot: available[0] }));
-            setPrompt("已完成初步分流分析"); speak("已完成初步分流分析"); setState(STATES.RESULT);
+            setPreferredDoctor(null); // 交給後端在整個科別裡找最快的醫師
+            setPrompt("已完成初步分流分析，正在為您查詢最快的門診時段..."); speak("已完成初步分流分析"); setState(STATES.RESULT);
             callRAG(newAnswers.mainComplaint, { body_part: bp, recommended_department: topDept });
           }
         }
@@ -747,7 +829,7 @@
         if (!name || !idNumber || !birth || !phone) { alert("請完整填寫姓名、身分證字號、生日與手機。"); return; }
         setIsSubmittingBooking(true);
         try {
-          const response = await fetch("http://127.0.0.1:8000/api/booking/confirm", {
+          const response = await fetch(`${API_BASE}/api/booking/confirm`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -817,6 +899,9 @@
               <button type="button" className={`chip ${bodyPart === "膝關節" ? "active" : ""}`} onClick={() => analyzeSymptom("膝蓋痛")}>膝關節</button>
               <button type="button" className={`chip ${bodyPart === "足踝" ? "active" : ""}`} onClick={() => analyzeSymptom("腳踝痛")}>足踝</button>
               <button type="button" className={`chip ${bodyPart === "外傷" ? "active" : ""}`} onClick={() => analyzeSymptom("跌倒外傷")}>外傷／骨折</button>
+              <button type="button" className={`chip ${bodyPart === "兒童" ? "active" : ""}`} onClick={() => analyzeSymptom("兒童骨骼問題")}>兒童骨科</button>
+              <button type="button" className={`chip ${bodyPart === "腫瘤" ? "active" : ""}`} onClick={() => analyzeSymptom("摸到腫塊懷疑骨腫瘤")}>骨骼腫瘤</button>
+              <button type="button" className={`chip ${bodyPart === "高壓氧" ? "active" : ""}`} onClick={() => analyzeSymptom("需要高壓氧治療")}>高壓氧治療</button>
             </div>
           </div>
         );
@@ -906,89 +991,96 @@
         );
       }
 
-      function renderBookingSummary() {
-        const availableSlots = doctorSchedules[booking.doctor] || timeSlots;
+      // 共用的「未來 7 天班表」格子：doctorFilter 有給值時，只顯示該醫師（改期用），
+      // 否則顯示整個科別所有醫師（掛號選擇用）。
+      function renderScheduleGrid(schedule, loading, error, onPick, doctorFilter, highlight) {
+        if (loading) return <div className="rag-loading">班表查詢中...</div>;
+        if (error) return <div className="rag-error">{error}</div>;
+        if (!schedule) return null;
+        return (
+          <div className="schedule-days">
+            {schedule.days.map((day) => {
+              const daySlots = doctorFilter ? day.slots.filter((s) => s.doctor === doctorFilter) : day.slots;
+              return (
+                <div className="schedule-day" key={day.date}>
+                  <div className="schedule-day-header">{day.date}（星期{day.weekday}）</div>
+                  {daySlots.length === 0 ? (
+                    <div className="schedule-day-empty">本日無門診</div>
+                  ) : (
+                    <div className="schedule-day-slots">
+                      {daySlots.map((slot) => {
+                        const isActive = highlight && highlight.doctor === slot.doctor && highlight.date === day.date && highlight.slot === slot.time_slot;
+                        return (
+                          <button
+                            type="button"
+                            key={`${slot.doctor}-${slot.session}`}
+                            className={`schedule-slot-btn ${slot.full ? "full" : ""} ${isActive ? "active" : ""}`}
+                            disabled={slot.full}
+                            onClick={() => onPick(slot.doctor, day.date, slot.time_slot)}
+                          >
+                            <span className="schedule-slot-doctor">{slot.doctor}</span>
+                            <span className="schedule-slot-session">{slot.session}</span>
+                            <span className="schedule-slot-remaining">{slot.full ? "已額滿" : `剩 ${slot.remaining} 位`}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      }
 
+      function renderBookingSummary() {
+        const hasAiBooking = !showBookingEdit && booking.doctor;
         return (
           <div className="ai-booking-summary">
-            <div className="ai-booking-badge">🤖 AI 已為您安排好門診</div>
-            <div className="ai-booking-row"><span>骨科次專科</span><strong>{booking.department}</strong></div>
-            <div className="ai-booking-row"><span>看診醫師</span><strong>{booking.doctor}</strong></div>
-            <div className="ai-booking-row"><span>日期時段</span><strong>{booking.date}．{booking.slot}</strong></div>
+            {!showBookingEdit ? (
+              aiAssignLoading ? (
+                <div className="rag-loading">🤖 AI 正在為您查詢最接近的門診時段...</div>
+              ) : aiAssignError ? (
+                <div className="rag-error">{aiAssignError}</div>
+              ) : hasAiBooking ? (
+                <>
+                  <div className="ai-booking-badge">🤖 AI 已為您安排好門診</div>
+                  <div className="ai-booking-row"><span>骨科次專科</span><strong>{booking.department}</strong></div>
+                  <div className="ai-booking-row"><span>看診醫師</span><strong>{booking.doctor}</strong></div>
+                  <div className="ai-booking-row"><span>日期時段</span><strong>{booking.date}．{booking.slot}</strong></div>
+                </>
+              ) : (
+                <div className="rag-empty">請選擇科別查看門診時段</div>
+              )
+            ) : null}
+
             <button type="button" className="ghost-btn" onClick={() => setShowBookingEdit((v) => !v)}>
-              {showBookingEdit ? "收合，使用 AI 建議即可" : "✏️ 我要自己選日期或醫師"}
+              {showBookingEdit ? (booking.doctor ? "收合，使用已選時段" : "收合") : "✏️ 我要自己選日期或醫師"}
             </button>
 
             {showBookingEdit ? (
               <div className="booking-edit-panel">
                 <div className="booking-info-group">
-                  <label className="field-label">預約日期</label>
-                  <input
-                    type="date"
-                    className="text-input"
-                    name="date"
-                    min={new Date().toISOString().split('T')[0]}
-                    value={booking.date}
-                    onChange={handleBookingChange}
-                  />
-                </div>
-
-                <div className="booking-info-group">
                   <label className="field-label">骨科次專科</label>
                   <select
-                    name="department"
-                    value={booking.department}
-                    onChange={handleBookingChange}
                     className="text-input"
+                    value={editDept}
+                    onChange={(e) => { setEditDept(e.target.value); setDeptSchedule(null); }}
                   >
-                    {Object.keys(doctorsByDept).map((dept) => (
+                    {DEPARTMENTS.map((dept) => (
                       <option key={dept} value={dept}>{dept}</option>
                     ))}
                   </select>
                 </div>
 
-                <div className="booking-info-group">
-                  <label className="field-label">看診醫師</label>
-                  <select
-                    name="doctor"
-                    value={booking.doctor}
-                    onChange={handleBookingChange}
-                    className="text-input"
-                  >
-                    {(doctorsByDept[booking.department] || []).map((doc) => (
-                      <option key={doc} value={doc}>{doc}</option>
-                    ))}
-                  </select>
-                  <div style={{ fontSize: '12.5px', color: '#1976d2', marginTop: '6px', fontWeight: 'bold' }}>
-                    💡 {booking.doctor} 的看診時段為：{availableSlots.map(s => s.split(' ')[0]).join('、')}
+                {booking.doctor ? (
+                  <div style={{ fontSize: "13px", color: "#1976d2", margin: "6px 0 4px", fontWeight: "bold" }}>
+                    ✅ 目前已選擇：{booking.doctor}．{booking.date}．{booking.slot}
                   </div>
-                </div>
+                ) : null}
 
-                <div className="booking-info-group">
-                  <label className="field-label">看診時段</label>
-                  <div className="slot-picker-container" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                    {availableSlots.map(s => (
-                      <button
-                        key={s}
-                        type="button"
-                        className={`option-btn ${booking.slot === s ? 'active' : ''}`}
-                        style={{
-                          flex: '1 1 100px',
-                          padding: '10px 5px',
-                          border: '1px solid #ccc',
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          backgroundColor: booking.slot === s ? '#2563eb' : '#fff',
-                          color: booking.slot === s ? '#fff' : '#333',
-                          fontSize: '14px'
-                        }}
-                        onClick={() => setBooking({...booking, slot: s})}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <div className="field-label" style={{ marginTop: "10px" }}>未來 7 天班表（點選要掛的時段）</div>
+                {renderScheduleGrid(deptSchedule, deptScheduleLoading, deptScheduleError, pickScheduleSlot, null, booking)}
               </div>
             ) : null}
           </div>
@@ -1003,7 +1095,7 @@
           }
           setIsSearching(true);
           try {
-            const response = await fetch("http://127.0.0.1:8000/api/booking/history", {
+            const response = await fetch(`${API_BASE}/api/booking/history`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id_number: searchId.trim() })
@@ -1031,7 +1123,7 @@
           if (!window.confirm(`確定要取消 ${item.slot} ${item.doctor} 的掛號嗎？`)) return;
           setActionLoading(item.appointment_no);
           try {
-            const response = await fetch("http://127.0.0.1:8000/api/booking/cancel", {
+            const response = await fetch(`${API_BASE}/api/booking/cancel`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id_number: searchId.trim(), appointment_no: item.appointment_no })
@@ -1052,17 +1144,24 @@
         };
 
         const openReschedule = (item) => {
-          const availableSlots = doctorSchedules[item.doctor] || timeSlots;
           setRescheduleTarget(item.appointment_no);
-          setRescheduleDate(new Date().toISOString().split('T')[0]);
-          setRescheduleSlot(availableSlots[0]);
+          setRescheduleDate(""); setRescheduleSlot("");
+          setRescheduleSchedule(null); setRescheduleScheduleError("");
+          setRescheduleScheduleLoading(true);
+          fetchDepartmentSchedule(item.department)
+            .then((data) => {
+              if (data.status === "success") setRescheduleSchedule(data);
+              else setRescheduleScheduleError(data.message || "查詢班表失敗");
+            })
+            .catch(() => setRescheduleScheduleError("查詢班表失敗，請確認後端（uvicorn）是否已啟動。"))
+            .finally(() => setRescheduleScheduleLoading(false));
         };
 
         const confirmReschedule = async (item) => {
           setActionLoading(item.appointment_no);
           try {
             const newSlot = `${rescheduleDate} ${rescheduleSlot}`;
-            const response = await fetch("http://127.0.0.1:8000/api/booking/reschedule", {
+            const response = await fetch(`${API_BASE}/api/booking/reschedule`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id_number: searchId.trim(), appointment_no: item.appointment_no, new_slot: newSlot })
@@ -1132,35 +1231,21 @@
 
                           {rescheduleTarget === item.appointment_no ? (
                             <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fff', border: '1px dashed #1976d2', borderRadius: '8px' }}>
-                              <label className="field-label">新的預約日期</label>
-                              <input
-                                type="date"
-                                className="text-input"
-                                min={new Date().toISOString().split('T')[0]}
-                                value={rescheduleDate}
-                                onChange={(e) => setRescheduleDate(e.target.value)}
-                              />
-                              <label className="field-label" style={{ marginTop: '10px', display: 'block' }}>新的看診時段（{item.doctor}）</label>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                {(doctorSchedules[item.doctor] || timeSlots).map((s) => (
-                                  <button
-                                    key={s}
-                                    type="button"
-                                    className="option-btn"
-                                    style={{
-                                      flex: '1 1 100px', padding: '10px 5px', border: '1px solid #ccc', borderRadius: '8px',
-                                      backgroundColor: rescheduleSlot === s ? '#2563eb' : '#fff',
-                                      color: rescheduleSlot === s ? '#fff' : '#333', fontSize: '14px'
-                                    }}
-                                    onClick={() => setRescheduleSlot(s)}
-                                  >
-                                    {s}
-                                  </button>
-                                ))}
-                              </div>
+                              <label className="field-label" style={{ display: 'block' }}>{item.doctor} 未來 7 天班表（點選新時段）</label>
+                              {renderScheduleGrid(
+                                rescheduleSchedule, rescheduleScheduleLoading, rescheduleScheduleError,
+                                (doc, date, slot) => { setRescheduleDate(date); setRescheduleSlot(slot); },
+                                item.doctor,
+                                { doctor: item.doctor, date: rescheduleDate, slot: rescheduleSlot }
+                              )}
+                              {rescheduleDate && rescheduleSlot ? (
+                                <div style={{ fontSize: '13px', color: '#1976d2', margin: '10px 0', fontWeight: 'bold' }}>
+                                  ✅ 已選擇：{rescheduleDate}．{rescheduleSlot}
+                                </div>
+                              ) : null}
                               <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                                 <button type="button" className="secondary-btn" style={{ margin: 0, flex: 1 }} onClick={() => setRescheduleTarget(null)}>取消</button>
-                                <button type="button" className="mini-btn" style={{ margin: 0, flex: 1 }} onClick={() => confirmReschedule(item)} disabled={isBusy}>
+                                <button type="button" className="mini-btn" style={{ margin: 0, flex: 1 }} onClick={() => confirmReschedule(item)} disabled={isBusy || !rescheduleDate || !rescheduleSlot}>
                                   {isBusy ? "處理中..." : "確認改期"}
                                 </button>
                               </div>
