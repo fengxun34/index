@@ -138,6 +138,8 @@
     }
 
     // ===== X 光辨識器：拍攝部位 → 建議骨科次專科 =====
+    // 目前先停用（首頁不顯示入口）；要重新開放時改成 true 即可
+    const ENABLE_XRAY = false;
     const XRAY_PARTS = {
       "頸椎": "脊椎外科", "胸腰椎": "脊椎外科", "肩膀": "運動醫學科", "手肘／手腕／手指": "手外科",
       "骨盆／髖關節": "關節重建科", "膝蓋": "關節重建科", "腳踝／足部": "足踝外科", "其他部位骨折": "骨折創傷科"
@@ -1935,12 +1937,14 @@
                   <span className="intent-desc">上次就診紀錄、改期、改醫師、取消、修改聯絡手機</span>
                 </button>
               </div>
-              <div className="intent-options intent-options-grid">
-                <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.XRAY, "請上傳或拍攝 X 光片")}>
-                  <span className="intent-emoji">🩻</span>
-                  <span className="intent-title">X 光辨識器</span>
-                  <span className="intent-desc">檢視 X 光片，依部位建議科別</span>
-                </button>
+              <div className={`intent-options intent-options-grid ${ENABLE_XRAY ? "" : "cols-2"}`}>
+                {ENABLE_XRAY ? (
+                  <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.XRAY, "請上傳或拍攝 X 光片")}>
+                    <span className="intent-emoji">🩻</span>
+                    <span className="intent-title">X 光辨識器</span>
+                    <span className="intent-desc">檢視 X 光片，依部位建議科別</span>
+                  </button>
+                ) : null}
                 <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.REMINDERS, "設定復健與用藥提醒")}>
                   <span className="intent-emoji">⏰</span>
                   <span className="intent-title">復健／用藥提醒</span>
@@ -2150,7 +2154,7 @@
           return renderCheckHistory();
         }
 
-        if (state === STATES.XRAY) return renderXray();
+        if (state === STATES.XRAY && ENABLE_XRAY) return renderXray();
         if (state === STATES.REMINDERS) return renderReminders();
         if (state === STATES.REHAB) return renderRehab();
 
