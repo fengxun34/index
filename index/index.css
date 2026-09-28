@@ -1256,23 +1256,6 @@ select:focus {
   }
 }
 
-/* ===== 首頁：延伸功能（X 光／提醒／復健影片）三格 ===== */
-.intent-options-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.intent-options-grid.cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-@media (max-width: 640px) {
-  .intent-options-grid,
-  .intent-options-grid.cols-2 {
-    grid-template-columns: 1fr;
-  }
-}
-
 /* ===== 上次就診紀錄 ===== */
 .last-visit-card {
   margin-top: 18px;
@@ -1633,4 +1616,93 @@ select:focus {
   margin: 0;
   font-size: 14px;
   color: #92400e;
+}
+
+/* ===== 分流結果：合併成一張卡片 ===== */
+.result-headline {
+  margin-bottom: 14px !important;
+  font-size: 17px;
+}
+
+/* ===== RAG 參考依據收合按鈕 ===== */
+.rag-toggle {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(148, 163, 184, 0.45);
+  background: transparent;
+  color: #93c5fd;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+}
+
+.rag-toggle:hover {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* ===== 首頁：看診後照護入口（低調的一行連結） ===== */
+.care-link-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: -8px 0 22px;
+}
+
+.care-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px dashed var(--border-strong);
+  background: rgba(239, 246, 255, 0.6);
+  color: var(--primary-strong);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  text-align: left;
+}
+
+.care-link span:last-child {
+  margin-left: auto;
+  font-size: 18px;
+}
+
+.care-link-desc {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* ===== 看診後照護：分頁切換 ===== */
+.care-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  margin-bottom: 16px;
+  border-radius: 999px;
+  background: #eef4ff;
+}
+
+.care-tab {
+  flex: 1;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.care-tab.active {
+  background: #fff;
+  color: var(--primary-strong);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
 }

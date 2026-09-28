@@ -427,6 +427,7 @@
       const [ragError, setRagError] = useState("");
       const [ragAnswer, setRagAnswer] = useState("");
       const [ragChunks, setRagChunks] = useState([]);
+      const [showRagSources, setShowRagSources] = useState(false); // RAG 參考依據預設收起，畫面比較乾淨
 
       const [searchId, setSearchId] = useState("");
       const [historyList, setHistoryList] = useState(null);
@@ -830,7 +831,7 @@
       }
 
       async function callRAG(question, metadata = {}) {
-        setRagLoading(true); setRagError(""); setRagAnswer(""); setRagChunks([]);
+        setRagLoading(true); setRagError(""); setRagAnswer(""); setRagChunks([]); setShowRagSources(false);
         try {
           const res = await fetch(`${API_BASE}/rag/answer`, {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -902,7 +903,7 @@
         setLastVisit(null); setRescheduleTarget(null); setRescheduleDoctor(""); setRescheduleAnyDoctor(false);
         setContactForm({ open: false, birth: "", phone: "", loading: false });
         setXrayImage(null); setXrayPart(""); setXrayView({ brightness: 100, contrast: 100, invert: false, zoom: 1 });
-        setRehabOpenId(null);
+        setRehabOpenId(null); setShowRagSources(false);
       }
 
       function startDirectBooking() {
@@ -1233,35 +1234,46 @@
       }
 
       function renderRagSection() {
+        const hasSources = ragChunks.length > 0 || !!externalHint;
         return (
           <div className="rag-panel">
             <div className="rag-panel-header">
-              <div><div className="rag-badge">RAG 知識檢索</div><h4 className="rag-title">AI 檢索增強建議</h4></div>
+              <div><div className="rag-badge">RAG 知識檢索</div><h4 className="rag-title">AI 建議</h4></div>
               {ragLoading && <div className="rag-loading">分析中...</div>}
             </div>
             {ragError ? <div className="rag-error">{ragError}</div> : null}
-            {!ragLoading && !ragError && ragAnswer ? (<div className="rag-answer-card"><div className="rag-answer-label">AI 建議</div><p>{ragAnswer}</p></div>) : null}
-            {!ragLoading && !ragError && ragChunks.length > 0 ? (
-              <div className="rag-sources">
-                <div className="rag-answer-label">檢索來源</div>
-                {ragChunks.map((chunk, idx) => (
-                  <div className="rag-source-card" key={idx}>
-                    <div className="rag-source-top">
-                      <span className="rag-chip">{chunk.category || chunk.metadata?.category || "知識片段"}</span>
-                      <span className="rag-score">相似度：{typeof chunk.score === "number" ? chunk.score.toFixed(3) : "N/A"}</span>
-                    </div>
-                    <p className="rag-source-text">{chunk.text || chunk.content || chunk.chunk_text || "無內容"}</p>
-                    <div className="rag-source-meta">來源：{chunk.source || chunk.metadata?.source || "本地骨科知識庫"}</div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
+            {!ragLoading && !ragError && ragAnswer ? (<div className="rag-answer-card"><p>{ragAnswer}</p></div>) : null}
             {!ragLoading && !ragError && !ragAnswer && ragChunks.length === 0 ? (<div className="rag-empty">目前尚未取得檢索結果。</div>) : null}
-            {externalHint ? (
-              <div className="rag-answer-card" style={{ marginTop: '10px', borderStyle: 'dashed' }}>
-                <div className="rag-answer-label">🌐 外部 AI 補充建議（僅供參考，不影響上方分流結果）</div>
-                <p>{externalHint}</p>
-              </div>
+
+            {/* 檢索來源、相似度等技術細節預設收起：病人只需要看建議，展示或想了解依據時再點開 */}
+            {!ragLoading && !ragError && hasSources ? (
+              <button type="button" className="rag-toggle" onClick={() => setShowRagSources((v) => !v)} aria-expanded={showRagSources}>
+                {showRagSources ? "▲ 收起參考依據" : `▼ 查看 AI 參考依據（${ragChunks.length} 筆知識庫資料）`}
+              </button>
+            ) : null}
+            {showRagSources && !ragLoading && !ragError ? (
+              <>
+                {ragChunks.length > 0 ? (
+                  <div className="rag-sources">
+                    {ragChunks.map((chunk, idx) => (
+                      <div className="rag-source-card" key={idx}>
+                        <div className="rag-source-top">
+                          <span className="rag-chip">{chunk.department || chunk.category || chunk.metadata?.category || "知識片段"}</span>
+                          <span className="rag-score">相似度：{typeof chunk.score === "number" ? chunk.score.toFixed(3) : "N/A"}</span>
+                        </div>
+                        <p className="rag-source-text">{chunk.text || chunk.content || chunk.chunk_text || "無內容"}</p>
+                        <div className="rag-source-meta">來源：{chunk.source || chunk.metadata?.source || "本地骨科知識庫"}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {externalHint ? (
+                  <div className="rag-answer-card" style={{ marginTop: '10px', borderStyle: 'dashed' }}>
+                    <div className="rag-answer-label">🌐 外部 AI 補充建議（僅供參考，不影響分流結果）</div>
+                    <p>{externalHint}</p>
+                  </div>
+                ) : null}
+              </>
             ) : null}
           </div>
         );
@@ -1774,6 +1786,17 @@
         );
       }
 
+      function renderCareTabs() {
+        return (
+          <div className="care-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={state === STATES.REHAB} className={`care-tab ${state === STATES.REHAB ? "active" : ""}`}
+              onClick={() => { if (state !== STATES.REHAB) goToFeature(STATES.REHAB, "看診後照護：居家復健動作教學"); }}>🎬 復健影片</button>
+            <button type="button" role="tab" aria-selected={state === STATES.REMINDERS} className={`care-tab ${state === STATES.REMINDERS ? "active" : ""}`}
+              onClick={() => { if (state !== STATES.REMINDERS) goToFeature(STATES.REMINDERS, "看診後照護：復健與用藥提醒"); }}>⏰ 用藥／復健提醒</button>
+          </div>
+        );
+      }
+
       function renderReminders() {
         const now = new Date();
         const dayKey = todayKey(now);
@@ -1781,7 +1804,7 @@
         const todays = reminders.filter((r) => r.enabled && r.days.includes(now.getDay()));
         return (
           <div className="form-card">
-            <h3>⏰ 復健／用藥提醒</h3>
+            {renderCareTabs()}
             <p className="helper-text" style={{ marginTop: 0 }}>
               提醒只存在這台裝置，不會上傳。網頁開著時，時間到會跳出提醒並語音播報；
               想要關掉網頁也能收到通知，請按下方「匯入手機行事曆」。
@@ -1828,7 +1851,7 @@
             <div className="reminder-section">
               <h4>所有提醒（{reminders.length}）</h4>
               {reminders.length === 0 ? (
-                <div className="rag-empty" style={{ color: 'var(--muted)' }}>還沒有提醒，可以從上方新增，或到「復健影片教學」一鍵加入。</div>
+                <div className="rag-empty" style={{ color: 'var(--muted)' }}>還沒有提醒，可以從上方新增，或到「復健影片」分頁一鍵加入。</div>
               ) : reminders.map((r) => (
                 <div key={r.id} className={`reminder-item ${r.enabled ? "" : "off"}`}>
                   <div>
@@ -1862,7 +1885,7 @@
         const list = rehabPart === "全部" ? REHAB_EXERCISES : REHAB_EXERCISES.filter((x) => x.part === rehabPart);
         return (
           <div className="form-card">
-            <h3>🎬 復健影片教學</h3>
+            {renderCareTabs()}
             <p className="helper-text" style={{ marginTop: 0 }}>常見骨科居家復健動作。開始前請先確認醫師或物理治療師同意，運動中若疼痛明顯加劇、麻木或腫脹請立即停止。</p>
             <div className="body-legend" style={{ justifyContent: 'flex-start' }}>
               {["全部", ...REHAB_PARTS].map((part) => (
@@ -1937,24 +1960,15 @@
                   <span className="intent-desc">上次就診紀錄、改期、改醫師、取消、修改聯絡手機</span>
                 </button>
               </div>
-              <div className={`intent-options intent-options-grid ${ENABLE_XRAY ? "" : "cols-2"}`}>
+              <div className="care-link-row">
+                <button type="button" className="care-link" onClick={() => goToFeature(STATES.REHAB, "看診後照護：居家復健動作教學")}>
+                  🏃 看診後照護<span className="care-link-desc">復健影片・用藥提醒</span><span aria-hidden="true">›</span>
+                </button>
                 {ENABLE_XRAY ? (
-                  <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.XRAY, "請上傳或拍攝 X 光片")}>
-                    <span className="intent-emoji">🩻</span>
-                    <span className="intent-title">X 光辨識器</span>
-                    <span className="intent-desc">檢視 X 光片，依部位建議科別</span>
+                  <button type="button" className="care-link" onClick={() => goToFeature(STATES.XRAY, "請上傳或拍攝 X 光片")}>
+                    🩻 X 光辨識器<span aria-hidden="true">›</span>
                   </button>
                 ) : null}
-                <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.REMINDERS, "設定復健與用藥提醒")}>
-                  <span className="intent-emoji">⏰</span>
-                  <span className="intent-title">復健／用藥提醒</span>
-                  <span className="intent-desc">定時提醒吃藥、做復健</span>
-                </button>
-                <button type="button" className="intent-btn" onClick={() => goToFeature(STATES.REHAB, "居家復健動作教學")}>
-                  <span className="intent-emoji">🎬</span>
-                  <span className="intent-title">復健影片教學</span>
-                  <span className="intent-desc">各部位居家復健動作示範</span>
-                </button>
               </div>
               <div className="intent-voice-hint">
                 <button type="button" className={`mic-btn ${recording ? "recording" : ""}`} onClick={recording ? stopRecord : startRecord}>{recording ? "停止錄音" : "開始語音"}</button>
@@ -2051,10 +2065,7 @@
             <>
               <div className="result-card summary-card">
                 <h4>初步分流結果</h4>
-                <p>根據您的症狀，系統建議優先掛號骨科：<strong> {result[0]?.[0] || "脊椎外科"} </strong></p>
-              </div>
-              <div className="result-card">
-                <h4>推薦次專科</h4>
+                <p className="result-headline">建議掛號：<strong>骨科・{result[0]?.[0] || "脊椎外科"}</strong></p>
                 {result.map((item, idx) => {
                   const department = Array.isArray(item) ? item[0] : item;
                   const score = Array.isArray(item) ? item[1] : 80;
