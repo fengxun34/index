@@ -7,11 +7,12 @@ import re
 import secrets
 import hashlib
 import html as html_lib
+import httpx
 from collections import defaultdict
 from datetime import datetime, timedelta
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse  # 讓 API 可以回傳漂亮網頁
+from fastapi.responses import HTMLResponse, JSONResponse  # 讓 API 可以回傳漂亮網頁
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, field_validator
 from sklearn.metrics.pairwise import cosine_similarity
@@ -29,6 +30,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+# ===== 連不到 Supabase 時的友善錯誤訊息 =====
+# 常見原因：網路不通（學校／公司 Wi-Fi 擋連線）、Supabase 免費專案超過一週沒用被自動暫停。
+# 不處理的話會噴一大串 Traceback，前端只看到「請確認後端是否已啟動」，很難找到真正原因。
+DB_UNREACHABLE_MESSAGE = (
+    "目前無法連線到 Supabase 資料庫。請確認：① 電腦網路是否正常（可改用手機熱點）；"
+    "② Supabase 專案是否被暫停（登入 supabase.com，若顯示 paused 請按 Restore project）。"
+)
+
+
+def db_error_message(prefix: str, e: Exception) -> str:
+    return DB_UNREACHABLE_MESSAGE if isinstance(e, httpx.HTTPError) else f"{prefix}: {str(e)}"
+
+
+@app.exception_handler(httpx.HTTPError)
+async def handle_db_unreachable(request: Request, exc: httpx.HTTPError):
+    print(f"⚠️ 無法連線到 Supabase：{exc}")
+    if request.url.path.startswith("/api/admin"):
+        return HTMLResponse(
+            content=f"<h2 style='text-align:center; color:#c0392b; margin:50px auto; max-width:720px; line-height:1.6;'>{html_lib.escape(DB_UNREACHABLE_MESSAGE)}</h2>",
+            status_code=503,
+        )
+    return JSONResponse(status_code=503, content={"status": "error", "message": DB_UNREACHABLE_MESSAGE})
+
 
 # ===== 小診所設定 =====
 # 系統目標是社區型骨科診所：病人畫面只看到「問題類型＋推薦醫師」，不會出現大醫院的次專科名稱。
@@ -692,7 +717,7 @@ def confirm_booking(req: BookingRequest):
 
         return {"status": "success", "message": f"掛號成功！已為您預約 {req.slot} {req.doctor}。"}
     except Exception as e:
-        return {"status": "error", "message": f"存入資料庫失敗: {str(e)}"}
+        return {"status": "error", "message": db_error_message("存入資料庫失敗", e)}
 
 @app.post("/api/booking/history")
 def get_booking_history(req: HistoryRequest):
@@ -757,7 +782,7 @@ def get_booking_history(req: HistoryRequest):
             "last_visit": last_visit,
         }
     except Exception as e:
-        return {"status": "error", "message": f"查詢失敗: {str(e)}"}
+        return {"status": "error", "message": db_error_message("查詢失敗", e)}
 
 @app.post("/api/booking/cancel")
 def cancel_booking(req: CancelRequest):
@@ -786,7 +811,7 @@ def cancel_booking(req: CancelRequest):
         supabase.table("appointments").update({"status": "cancelled"}).eq("id", appt["id"]).execute()
         return {"status": "success", "message": f"已為您取消 {appt['appointment_date']} {appt['time_slot']} {appt['doctor']} 的掛號。"}
     except Exception as e:
-        return {"status": "error", "message": f"取消掛號失敗: {str(e)}"}
+        return {"status": "error", "message": db_error_message("取消掛號失敗", e)}
 
 @app.post("/api/booking/reschedule")
 def reschedule_booking(req: RescheduleRequest):
@@ -853,7 +878,7 @@ def reschedule_booking(req: RescheduleRequest):
 
         return {"status": "success", "message": f"已為您改期至 {new_date} {new_time_slot} {doctor}。"}
     except Exception as e:
-        return {"status": "error", "message": f"改期失敗: {str(e)}"}
+        return {"status": "error", "message": db_error_message("改期失敗", e)}
 
 @app.post("/api/patient/update")
 def update_patient_contact(req: PatientUpdateRequest):
@@ -869,7 +894,7 @@ def update_patient_contact(req: PatientUpdateRequest):
         supabase.table("patients").update({"phone": req.phone}).eq("id", patient["id"]).execute()
         return {"status": "success", "message": f"已將聯絡手機更新為 {req.phone}。"}
     except Exception as e:
-        return {"status": "error", "message": f"修改資料失敗: {str(e)}"}
+        return {"status": "error", "message": db_error_message("修改資料失敗", e)}
 
 # 管理者專用，帶有網頁介面的掛號總覽 API（需登入）
 @app.get("/api/admin/all_bookings", response_class=HTMLResponse)
@@ -1014,7 +1039,7 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
         """
         return HTMLResponse(content=html_content)
     except Exception as e:
-        return HTMLResponse(content=f"<h2 style='text-align:center; color:red; margin-top:50px;'>發生錯誤：{str(e)}</h2>")
+        return HTMLResponse(content=f"<h2 style='text-align:center; color:red; margin-top:50px;'>{html_lib.escape(db_error_message('發生錯誤', e))}</h2>")
 
 if __name__ == "__main__":
     import uvicorn
