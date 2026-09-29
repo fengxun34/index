@@ -428,8 +428,10 @@
       const [ragAnswer, setRagAnswer] = useState("");
       const [ragChunks, setRagChunks] = useState([]);
       const [showRagSources, setShowRagSources] = useState(false); // RAG 參考依據預設收起，畫面比較乾淨
+      const [ragAgreement, setRagAgreement] = useState(null); // 知識庫是否支持分流結果：agree / partial / differ
 
       const [searchId, setSearchId] = useState("");
+      const [searchBirth, setSearchBirth] = useState("");
       const [historyList, setHistoryList] = useState(null);
       const [isSearching, setIsSearching] = useState(false);
       const [actionLoading, setActionLoading] = useState(null);
@@ -443,7 +445,7 @@
       const [rescheduleDoctor, setRescheduleDoctor] = useState("");
       const [rescheduleAnyDoctor, setRescheduleAnyDoctor] = useState(false);
       const [lastVisit, setLastVisit] = useState(null);
-      const [contactForm, setContactForm] = useState({ open: false, birth: "", phone: "", loading: false });
+      const [contactForm, setContactForm] = useState({ open: false, phone: "", loading: false });
 
       // X 光辨識器
       const [xrayImage, setXrayImage] = useState(null); // { url, name, check }
@@ -830,8 +832,15 @@
         return Object.entries(score).sort((a, b) => b[1] - a[1]).slice(0, 3);
       }
 
+      // 送去知識庫檢索的內容：部位＋主訴＋每一題問診回答（不只第一句主訴），檢索才用得到問診結果
+      function buildRagQuestion(part, ans) {
+        const { mainComplaint, ...rest } = ans || {};
+        const replies = Object.values(rest).filter((v) => typeof v === "string" && v.trim());
+        return [part ? `部位：${part}` : "", mainComplaint || "", ...replies].filter(Boolean).join("。");
+      }
+
       async function callRAG(question, metadata = {}) {
-        setRagLoading(true); setRagError(""); setRagAnswer(""); setRagChunks([]); setShowRagSources(false);
+        setRagLoading(true); setRagError(""); setRagAnswer(""); setRagChunks([]); setShowRagSources(false); setRagAgreement(null);
         try {
           const res = await fetch(`${API_BASE}/rag/answer`, {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -840,6 +849,7 @@
           const data = await res.json();
           setRagAnswer(data.answer || "");
           setRagChunks(Array.isArray(data.retrieved_chunks) ? data.retrieved_chunks : []);
+          setRagAgreement(data.agreement || null);
         } catch (err) {
           console.error("RAG 錯誤：", err);
           setRagError("RAG 連線失敗，請確認本機後端是否啟動。");
@@ -901,9 +911,9 @@
         setRagAnswer(""); setRagChunks([]); setChatHistory([]); setExternalHint("");
         setSearchId(""); setHistoryList(null);
         setLastVisit(null); setRescheduleTarget(null); setRescheduleDoctor(""); setRescheduleAnyDoctor(false);
-        setContactForm({ open: false, birth: "", phone: "", loading: false });
+        setContactForm({ open: false, phone: "", loading: false });
         setXrayImage(null); setXrayPart(""); setXrayView({ brightness: 100, contrast: 100, invert: false, zoom: 1 });
-        setRehabOpenId(null); setShowRagSources(false);
+        setRehabOpenId(null); setShowRagSources(false); setRagAgreement(null); setSearchBirth("");
       }
 
       function startDirectBooking() {
@@ -1009,7 +1019,7 @@
 
       function addRehabReminder(exercise) {
         const ok = addReminder({ type: "rehab", title: exercise.name, time: "20:00", days: [0, 1, 2, 3, 4, 5, 6], note: exercise.reps });
-        if (ok) setToast(`已加入每天 20:00 的復健提醒：${exercise.name}（可到「復健／用藥提醒」修改）`);
+        if (ok) setToast(`已加入每天 20:00 的復健提醒：${exercise.name}（可到「用藥／復健提醒」分頁修改）`);
       }
 
       // 背景取得外部 AI（Google Apps Script）的補充建議，全程不 await、不阻塞問診，
@@ -1076,7 +1086,7 @@
             setResult(calculated);
             setPreferredDoctor(null); // 交給後端在整個科別裡找最快的醫師
             setPrompt("已完成初步分流分析，正在為您查詢最快的門診時段..."); speak("已完成初步分流分析"); setState(STATES.RESULT);
-            callRAG(newAnswers.mainComplaint, { body_part: bp, recommended_department: topDept });
+            callRAG(buildRagQuestion(bp, newAnswers), { body_part: bp, recommended_department: topDept });
           }
         }
       }
@@ -1242,7 +1252,16 @@
               {ragLoading && <div className="rag-loading">分析中...</div>}
             </div>
             {ragError ? <div className="rag-error">{ragError}</div> : null}
-            {!ragLoading && !ragError && ragAnswer ? (<div className="rag-answer-card"><p>{ragAnswer}</p></div>) : null}
+            {!ragLoading && !ragError && ragAnswer ? (
+              <div className="rag-answer-card">
+                {ragAgreement ? (
+                  <div className={`rag-agreement ${ragAgreement === "agree" ? "agree" : "hint"}`}>
+                    {ragAgreement === "agree" ? "✅ 知識庫支持分流結果" : "💡 知識庫補充提示"}
+                  </div>
+                ) : null}
+                {ragAnswer.split("\n").map((line, i) => <p key={i}>{line}</p>)}
+              </div>
+            ) : null}
             {!ragLoading && !ragError && !ragAnswer && ragChunks.length === 0 ? (<div className="rag-empty">目前尚未取得檢索結果。</div>) : null}
 
             {/* 檢索來源、相似度等技術細節預設收起：病人只需要看建議，展示或想了解依據時再點開 */}
@@ -1258,7 +1277,7 @@
                     {ragChunks.map((chunk, idx) => (
                       <div className="rag-source-card" key={idx}>
                         <div className="rag-source-top">
-                          <span className="rag-chip">{chunk.department || chunk.category || chunk.metadata?.category || "知識片段"}</span>
+                          <span className="rag-chip">{chunk.department || chunk.category || chunk.metadata?.category || "知識片段"}{chunk.supports_triage ? "・支持分流結果" : ""}</span>
                           <span className="rag-score">相似度：{typeof chunk.score === "number" ? chunk.score.toFixed(3) : "N/A"}</span>
                         </div>
                         <p className="rag-source-text">{chunk.text || chunk.content || chunk.chunk_text || "無內容"}</p>
@@ -1319,8 +1338,8 @@
                 <span className="link-sep">・</span>
                 <button type="button" className="link-btn" onClick={() => {
                   setState(STATES.CHECK_HISTORY);
-                  setPrompt("請輸入身分證字號查詢、取消或改期掛號");
-                  speak("請輸入您的身分證字號以查詢、取消或改期掛號");
+                  setPrompt("請輸入身分證字號與生日，查詢、取消或改期掛號");
+                  speak("請輸入您的身分證字號與生日，以查詢、取消或改期掛號");
                 }}>🔍 查詢／取消／改期掛號</button>
               </div>
             </div>
@@ -1426,8 +1445,8 @@
 
       function renderCheckHistory() {
         const handleSearch = async () => {
-          if (!searchId.trim()) {
-            alert("請輸入身分證字號");
+          if (!searchId.trim() || !searchBirth.trim()) {
+            alert("請輸入身分證字號與生日");
             return;
           }
           setIsSearching(true);
@@ -1435,7 +1454,7 @@
             const response = await fetch(`${API_BASE}/api/booking/history`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id_number: searchId.trim() })
+              body: JSON.stringify({ id_number: searchId.trim(), birth_date: searchBirth.trim() })
             });
             const data = await response.json();
             if (data.status === "success") {
@@ -1448,7 +1467,10 @@
                 speak(`為您找到 ${data.data.length} 筆紀錄。`);
               }
             } else {
-              alert("查詢失敗：" + data.message);
+              const msg = data.message || (Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join("；") : data.detail) || "請稍後再試。";
+              setHistoryList(null); setLastVisit(null);
+              speak(msg);
+              alert("查詢失敗：" + msg);
             }
           } catch (err) {
             console.error("查詢 API 呼叫失敗", err);
@@ -1465,7 +1487,7 @@
             const response = await fetch(`${API_BASE}/api/booking/cancel`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id_number: searchId.trim(), appointment_no: item.appointment_no })
+              body: JSON.stringify({ id_number: searchId.trim(), birth_date: searchBirth.trim(), appointment_no: item.appointment_no })
             });
             const data = await response.json();
             if (data.status === "success") {
@@ -1507,6 +1529,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 id_number: searchId.trim(),
+                birth_date: searchBirth.trim(),
                 appointment_no: item.appointment_no,
                 new_slot: newSlot,
                 ...(newDoctor !== item.doctor ? { new_doctor: newDoctor } : {})
@@ -1531,9 +1554,9 @@
         };
 
         const submitContactUpdate = async () => {
-          const birth = contactForm.birth.trim();
+          const birth = searchBirth.trim();
           const phone = contactForm.phone.trim();
-          if (!birth || !phone) { alert("請填寫生日與新的手機號碼。"); return; }
+          if (!phone) { alert("請填寫新的手機號碼。"); return; }
           if (!/^09\d{8}$/.test(phone)) { alert("手機格式不正確，需為 09 開頭的 10 位數字。"); return; }
           setContactForm((prev) => ({ ...prev, loading: true }));
           try {
@@ -1546,7 +1569,7 @@
             if (response.ok && data.status === "success") {
               speak(data.message);
               setToast(data.message);
-              setContactForm({ open: false, birth: "", phone: "", loading: false });
+              setContactForm({ open: false, phone: "", loading: false });
               return;
             }
             const msg = data.message || (Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join("；") : data.detail) || "請稍後再試。";
@@ -1586,13 +1609,21 @@
         return (
           <div className="form-card">
             <h3>就診紀錄／修改預約</h3>
-            <label className="field-label">請輸入身分證字號</label>
+            <p className="helper-text" style={{ marginTop: 0 }}>為保護個資，需同時輸入掛號時填寫的身分證字號與生日。</p>
+            <label className="field-label">身分證字號</label>
+            <input
+              className="text-input"
+              value={searchId}
+              onChange={(e) => setSearchId(e.target.value.toUpperCase())}
+              placeholder="例如：A123456789"
+            />
+            <label className="field-label">生日</label>
             <div className="input-row">
               <input
                 className="text-input"
-                value={searchId}
-                onChange={(e) => setSearchId(e.target.value.toUpperCase())}
-                placeholder="例如：A123456789"
+                value={searchBirth}
+                onChange={(e) => setSearchBirth(e.target.value)}
+                placeholder="YYYY/MM/DD"
                 onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
               />
               <button type="button" className="mini-btn" onClick={handleSearch} disabled={isSearching}>
@@ -1690,13 +1721,10 @@
                 ) : (
                   <>
                     <h4 style={{ margin: '0 0 4px' }}>修改聯絡手機</h4>
-                    <p className="helper-text" style={{ margin: 0 }}>為保護個資，需輸入掛號時填寫的生日才能修改。</p>
-                    <label className="field-label">生日</label>
-                    <input className="text-input" value={contactForm.birth} placeholder="YYYY/MM/DD" onChange={(e) => setContactForm((prev) => ({ ...prev, birth: e.target.value }))} />
                     <label className="field-label">新的手機號碼</label>
                     <input className="text-input" value={contactForm.phone} placeholder="09xxxxxxxx" inputMode="numeric" onChange={(e) => setContactForm((prev) => ({ ...prev, phone: e.target.value.trim() }))} />
                     <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                      <button type="button" className="secondary-btn" style={{ margin: 0, flex: 1 }} onClick={() => setContactForm({ open: false, birth: "", phone: "", loading: false })}>取消</button>
+                      <button type="button" className="secondary-btn" style={{ margin: 0, flex: 1 }} onClick={() => setContactForm({ open: false, phone: "", loading: false })}>取消</button>
                       <button type="button" className="mini-btn" style={{ margin: 0, flex: 1 }} onClick={submitContactUpdate} disabled={contactForm.loading}>{contactForm.loading ? "處理中..." : "確認修改"}</button>
                     </div>
                   </>
@@ -1952,8 +1980,8 @@
                 </button>
                 <button type="button" className="intent-btn" onClick={() => {
                   setState(STATES.CHECK_HISTORY);
-                  setPrompt("請輸入身分證字號查詢就診紀錄或修改預約");
-                  speak("請輸入您的身分證字號，查詢上次就診紀錄或修改預約");
+                  setPrompt("請輸入身分證字號與生日，查詢就診紀錄或修改預約");
+                  speak("請輸入您的身分證字號與生日，查詢上次就診紀錄或修改預約");
                 }}>
                   <span className="intent-emoji">📋</span>
                   <span className="intent-title">就診紀錄／修改預約</span>
@@ -2070,16 +2098,18 @@
                   const department = Array.isArray(item) ? item[0] : item;
                   const score = Array.isArray(item) ? item[1] : 80;
                   const percent = Math.min(100, Math.round((score / 80) * 100));
+                  const level = percent >= 75 ? "高" : percent >= 45 ? "中" : "低";
                   return (
                     <div className="confidence" key={department}>
                       <div className="confidence-row">
                         <span className="confidence-label">#{idx + 1} {department}</span>
-                        <span className="confidence-value">{percent}%</span>
+                        <span className={`confidence-value level-${level === "高" ? "high" : level === "中" ? "mid" : "low"}`}>推薦程度：{level}</span>
                       </div>
                       <div className="confidence-bar"><div className="confidence-bar-fill" style={{ width: `${percent}%` }} /></div>
                     </div>
                   );
                 })}
+                <p className="confidence-note">推薦程度依「不適部位」與「問診回答」的規則計分換算，僅供掛號參考，不是診斷機率。</p>
               </div>
               {renderRagSection()}
               <button type="button" className="btn" onClick={() => {

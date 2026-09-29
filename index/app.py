@@ -91,15 +91,20 @@ class BookingRequest(BaseModel):
             raise ValueError(f"科別不正確，需為以下其中一項：{'、'.join(ALLOWED_DEPARTMENTS)}")
         return v
 
+# 查詢／取消／改期／修改資料都要「身分證字號＋生日」同時相符，
+# 避免只知道別人的身分證字號就能看到或更動對方的掛號
 class HistoryRequest(BaseModel):
     id_number: str
+    birth_date: str
 
 class CancelRequest(BaseModel):
     id_number: str
+    birth_date: str
     appointment_no: int
 
 class RescheduleRequest(BaseModel):
     id_number: str
+    birth_date: str
     appointment_no: int
     new_slot: str
     # 選填：同一科別內改掛其他醫師（不給就維持原本的醫師）
@@ -107,7 +112,7 @@ class RescheduleRequest(BaseModel):
 
 class PatientUpdateRequest(BaseModel):
     id_number: str
-    birth_date: str   # 用生日當第二道驗證，避免只知道身分證字號就能改別人的聯絡資料
+    birth_date: str
     phone: str
 
     @field_validator("phone")
@@ -310,7 +315,55 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
 
     return credentials.username
 
+# ===== 病人身分驗證（身分證字號＋生日）=====
+# 同一身分證字號 15 分鐘內驗證失敗滿 5 次就先鎖住，避免有人用猜生日的方式硬試
+MAX_VERIFY_ATTEMPTS = 5
+VERIFY_LOCKOUT_MINUTES = 15
+_failed_verify_attempts = defaultdict(list)
+# 查無此人跟生日不符回同一句話，不透露「這個身分證字號有沒有掛過號」
+VERIFY_FAILED_MESSAGE = "查無資料，或身分證字號與生日不符。"
+
+
+def normalize_birth_date(value: str) -> Optional[str]:
+    """把 1990/1/1、1990-01-01、1990.01.01 等寫法統一成 YYYY-MM-DD，格式不對回傳 None。"""
+    v = (value or "").strip().replace("/", "-").replace(".", "-")
+    try:
+        return datetime.strptime(v, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        return None
+
+
+def verify_patient_identity(id_number: str, birth_date: str, fields: str = "id"):
+    """驗證身分證字號＋生日，成功回傳 (patient, None)，失敗回傳 (None, 錯誤訊息)。"""
+    id_number = (id_number or "").strip().upper()
+    window_start = datetime.utcnow() - timedelta(minutes=VERIFY_LOCKOUT_MINUTES)
+    recent = [t for t in _failed_verify_attempts[id_number] if t > window_start]
+    _failed_verify_attempts[id_number] = recent
+    if len(recent) >= MAX_VERIFY_ATTEMPTS:
+        return None, f"驗證失敗次數過多，請 {VERIFY_LOCKOUT_MINUTES} 分鐘後再試，或洽診所櫃台。"
+
+    birth = normalize_birth_date(birth_date)
+    if birth is None:
+        return None, "生日格式不正確，請輸入 YYYY/MM/DD，例如 1990/01/01。"
+
+    select_fields = fields if "birth_date" in fields else f"{fields}, birth_date"
+    res = supabase.table("patients").select(select_fields).eq("id_number", id_number).execute()
+    patient = res.data[0] if res.data else None
+    if not patient or patient.get("birth_date") != birth:
+        _failed_verify_attempts[id_number].append(datetime.utcnow())
+        return None, VERIFY_FAILED_MESSAGE
+
+    _failed_verify_attempts.pop(id_number, None)
+    return patient, None
+
+
 # ===== API 路由 =====
+
+def _extract_advice(content: str) -> str:
+    """從知識庫片段（update.py 組出的「部位：…。症狀：…。建議：…。看診醫師與時段：…」）取出建議那一段。"""
+    m = re.search(r"建議：(.*?)。看診醫師", content or "")
+    return m.group(1).strip() if m else ""
+
 
 @app.post("/rag/answer")
 def rag_answer(req: AnswerRequest):
@@ -318,26 +371,70 @@ def rag_answer(req: AnswerRequest):
     if vectorizer is None:
         departments, contents, vectorizer, doc_matrix = load_sql_data()
     if vectorizer is None:
-        return {"answer": "知識庫尚未就緒", "retrieved_chunks": []}
+        return {"answer": "知識庫尚未就緒", "retrieved_chunks": [], "agreement": None}
 
     query_vec = vectorizer.transform([req.question]).toarray().astype(np.float32)
     sims = cosine_similarity(query_vec, doc_matrix)[0]
+    ranked = sorted(((i, float(s)) for i, s in enumerate(sims) if s > 0), key=lambda x: x[1], reverse=True)
+    # 不是小朋友的問題（部位不是「兒童」、描述也沒提到小孩），就不要拿兒童骨科的資料當依據，
+    # 避免成人膝蓋痛被「青少年膝蓋痛」這類片段帶偏
+    body_part = (req.metadata or {}).get("body_part")
+    if body_part and body_part != "兒童" and not re.search(r"小孩|兒童|小朋友|孩子|青少年|寶寶|嬰兒", req.question):
+        ranked = [(i, s) for i, s in ranked if departments[i] != "兒童骨科"]
+    if not ranked:
+        return {"answer": "無法判斷您的症狀，建議先掛骨科門診由醫師評估。", "retrieved_chunks": [], "agreement": None}
 
-    hits = []
-    for i, s in enumerate(sims):
-        if s > 0:
-            hits.append({
-                "department": departments[i],
-                "content": contents[i],
-                "score": float(s)
-            })
+    top_k = max(1, req.top_k or 3)
+    recommended = (req.metadata or {}).get("recommended_department")
+    if recommended not in ALLOWED_DEPARTMENTS:
+        recommended = None
 
-    hits = sorted(hits, key=lambda x: x['score'], reverse=True)[:req.top_k]
-    if not hits:
-        return {"answer": "無法判斷您的症狀，建議先掛骨科門診由醫師評估。", "retrieved_chunks": []}
+    def to_chunk(i, s):
+        return {
+            "department": departments[i],
+            "content": contents[i],
+            "score": s,
+            "supports_triage": recommended is not None and departments[i] == recommended,
+        }
+
+    hits = [to_chunk(i, s) for i, s in ranked[:top_k]]
+    top_dept = departments[ranked[0][0]]
+
+    # 沒有分流結果可以對照（例如單純查詢）：照舊直接回傳最相似的科別
+    if recommended is None:
+        return {
+            "answer": f"根據您的描述，建議掛【骨科・{top_dept}】",
+            "retrieved_chunks": hits,
+            "agreement": None,
+        }
+
+    # 有分流結果：RAG 的角色是「幫分流結果找依據」，不是另外算一個答案跟它打架。
+    # 找出知識庫中跟分流科別相符、相似度最高的片段；若不在前幾名也補進來，讓使用者看得到依據。
+    supporting = next(((i, s) for i, s in ranked if departments[i] == recommended), None)
+    if supporting and not any(h["supports_triage"] for h in hits):
+        hits.append(to_chunk(*supporting))
+
+    top_score = ranked[0][1]
+    advice = _extract_advice(contents[supporting[0]]) if supporting else ""
+    if top_dept == recommended:
+        agreement = "agree"
+        answer = f"知識庫也支持這個判斷：您的描述與【骨科・{recommended}】的常見狀況最相符。"
+    elif supporting and supporting[1] >= top_score * 0.5:
+        agreement = "partial"
+        answer = (f"建議依分流結果掛【骨科・{recommended}】，知識庫也找到相關資料；"
+                  f"另外提示您的描述也與【{top_dept}】有關，看診時可與醫師討論。")
+    else:
+        agreement = "differ"
+        answer = (f"建議先依分流結果掛【骨科・{recommended}】。"
+                  f"知識庫另外提示可能與【{top_dept}】有關，看診時可向醫師提出。")
+    if advice:
+        answer += f"\n參考建議：{advice}。"
+
     return {
-        "answer": f"根據您的描述，建議掛【骨科・{hits[0]['department']}】",
-        "retrieved_chunks": hits
+        "answer": answer,
+        "retrieved_chunks": hits,
+        "agreement": agreement,
+        "recommended_department": recommended,
     }
 
 @app.get("/api/schedule/department/{department}")
@@ -457,9 +554,19 @@ def confirm_booking(req: BookingRequest):
         # 以身分證字號為唯一鍵，寫入或更新病人基本資料
         patient_payload = {"id_number": id_number, "name": req.name}
         if req.birth_date:
-            patient_payload["birth_date"] = req.birth_date.replace("/", "-")
+            normalized_birth = normalize_birth_date(req.birth_date)
+            if normalized_birth is None:
+                return {"status": "error", "message": "生日格式不正確，請輸入 YYYY/MM/DD，例如 1990/01/01。"}
+            patient_payload["birth_date"] = normalized_birth
         if req.phone:
             patient_payload["phone"] = req.phone
+
+        # 已經掛過號的病人：生日必須跟第一次填的一樣，否則任何人都能用別人的身分證字號
+        # 掛號並「改掉」對方的生日，再拿來查詢／取消對方的掛號
+        existing = supabase.table("patients").select("birth_date").eq("id_number", id_number).execute()
+        existing_birth = existing.data[0].get("birth_date") if existing.data else None
+        if existing_birth and patient_payload.get("birth_date") != existing_birth:
+            return {"status": "error", "message": "此身分證字號已有掛號資料，但生日與先前填寫的不符，請確認後再試，或洽診所櫃台。"}
 
         patient_res = supabase.table("patients").upsert(
             patient_payload,
@@ -510,12 +617,10 @@ def get_booking_history(req: HistoryRequest):
         return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
 
     try:
-        id_number = req.id_number.upper()
-        patient_res = supabase.table("patients").select("id, name").eq("id_number", id_number).execute()
-        if not patient_res.data:
-            return {"status": "success", "data": [], "last_visit": None}
+        patient, error = verify_patient_identity(req.id_number, req.birth_date, "id, name")
+        if error:
+            return {"status": "error", "message": error}
 
-        patient = patient_res.data[0]
         appt_res = (
             supabase.table("appointments")
             .select("id, appointment_no, department, doctor, appointment_date, time_slot, status, created_at")
@@ -576,11 +681,10 @@ def cancel_booking(req: CancelRequest):
         return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
 
     try:
-        id_number = req.id_number.strip().upper()
-        patient_res = supabase.table("patients").select("id").eq("id_number", id_number).execute()
-        if not patient_res.data:
-            return {"status": "error", "message": "查無此身分證字號的掛號紀錄。"}
-        patient_id = patient_res.data[0]["id"]
+        patient, error = verify_patient_identity(req.id_number, req.birth_date)
+        if error:
+            return {"status": "error", "message": error}
+        patient_id = patient["id"]
 
         appt_res = (
             supabase.table("appointments")
@@ -606,11 +710,10 @@ def reschedule_booking(req: RescheduleRequest):
         return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
 
     try:
-        id_number = req.id_number.strip().upper()
-        patient_res = supabase.table("patients").select("id").eq("id_number", id_number).execute()
-        if not patient_res.data:
-            return {"status": "error", "message": "查無此身分證字號的掛號紀錄。"}
-        patient_id = patient_res.data[0]["id"]
+        patient, error = verify_patient_identity(req.id_number, req.birth_date)
+        if error:
+            return {"status": "error", "message": error}
+        patient_id = patient["id"]
 
         appt_res = (
             supabase.table("appointments")
@@ -667,19 +770,14 @@ def reschedule_booking(req: RescheduleRequest):
 
 @app.post("/api/patient/update")
 def update_patient_contact(req: PatientUpdateRequest):
-    """修改預約聯絡資訊（手機）。需要身分證字號 + 生日同時相符才能修改。"""
+    """修改預約聯絡資訊（手機）。"""
     if supabase is None:
         return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
 
     try:
-        id_number = req.id_number.strip().upper()
-        birth_date = req.birth_date.strip().replace("/", "-")
-        patient_res = supabase.table("patients").select("id, birth_date").eq("id_number", id_number).execute()
-        if not patient_res.data:
-            return {"status": "error", "message": "查無此身分證字號的病人資料。"}
-        patient = patient_res.data[0]
-        if not patient.get("birth_date") or patient["birth_date"] != birth_date:
-            return {"status": "error", "message": "生日與掛號時填寫的資料不符，無法修改。"}
+        patient, error = verify_patient_identity(req.id_number, req.birth_date)
+        if error:
+            return {"status": "error", "message": error}
 
         supabase.table("patients").update({"phone": req.phone}).eq("id", patient["id"]).execute()
         return {"status": "success", "message": f"已將聯絡手機更新為 {req.phone}。"}
