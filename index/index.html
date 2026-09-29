@@ -28,7 +28,8 @@
       NON_ORTHO_SUGGESTION: "NON_ORTHO_SUGGESTION",
       XRAY: "XRAY",
       REMINDERS: "REMINDERS",
-      REHAB: "REHAB"
+      REHAB: "REHAB",
+      REFERRAL: "REFERRAL"
     };
 
     // 非骨科症狀關鍵字：偵測到這些且沒有合併骨骼關節相關描述時，
@@ -45,30 +46,41 @@
 
     const API_BASE = "http://127.0.0.1:8000";
 
-    // 骨科次專科清單（要跟 app.py 的 ALLOWED_DEPARTMENTS 保持一致）
+    // ===== 小診所設定（要跟 app.py 的 DOCTORS／CATEGORY_LABELS／REFERRAL_CATEGORIES 保持一致） =====
+    // 病人畫面只顯示「問題類型＋推薦醫師」；下面這 10 個是 AI 分流的內部問題類型代碼
     const DEPARTMENTS = [
       "脊椎外科", "運動醫學科", "關節重建科", "手外科", "足踝外科",
       "骨折創傷科", "骨質疏鬆症門診", "兒童骨科", "骨骼腫瘤科", "高壓氧治療中心"
     ];
 
-    // 醫師⇄科別對照（僅用於「使用者直接講出醫師或科別名稱」時的文字比對，
-    // 一位醫師可以有多個擅長科別；實際班表與剩餘名額一律即時向後端查詢，不在前端寫死）
-    const DOCTOR_DEPARTMENTS = {
-      "高醫師": ["脊椎外科"],
-      "謝醫師": ["脊椎外科"],
-      "曾醫師": ["運動醫學科"],
-      "蔡醫師": ["運動醫學科"],
-      "林醫師": ["關節重建科", "骨質疏鬆症門診"],
-      "鍾醫師": ["關節重建科"],
-      "張醫師": ["手外科"],
-      "王醫師": ["足踝外科", "運動醫學科"],
-      "陳醫師": ["骨折創傷科", "兒童骨科"],
-      "徐醫師": ["骨折創傷科"],
-      "吳醫師": ["骨質疏鬆症門診"],
-      "周醫師": ["兒童骨科"],
-      "楊醫師": ["骨骼腫瘤科"],
-      "洪醫師": ["高壓氧治療中心"]
+    const CATEGORY_LABELS = {
+      "脊椎外科": "脊椎（頸椎、腰椎）",
+      "運動醫學科": "運動傷害",
+      "關節重建科": "關節退化",
+      "手外科": "手部（手腕、手指）",
+      "足踝外科": "足踝",
+      "骨折創傷科": "骨折、外傷",
+      "骨質疏鬆症門診": "骨質疏鬆",
+      "兒童骨科": "兒童骨骼",
+      "骨骼腫瘤科": "疑似骨骼腫瘤",
+      "高壓氧治療中心": "需高壓氧治療"
     };
+    const categoryLabel = (dept) => CATEGORY_LABELS[dept] || dept || "";
+
+    // 小診所無法處理、建議轉診大醫院的問題類型
+    const REFERRAL_CATEGORIES = {
+      "骨骼腫瘤科": "骨骼腫瘤需要進一步影像與病理檢查，建議轉診至醫學中心骨科（骨腫瘤專科）。",
+      "高壓氧治療中心": "本診所沒有高壓氧設備，建議轉診至設有高壓氧治療中心的醫院。"
+    };
+
+    // 診所醫師：擅長項目（顯示用）與負責的問題類型（用於「使用者直接講出醫師姓名」時的文字比對；
+    // 實際班表與剩餘名額一律即時向後端查詢，不在前端寫死）
+    const CLINIC_DOCTORS = {
+      "高醫師": { specialty: "脊椎、骨質疏鬆", departments: ["脊椎外科", "骨質疏鬆症門診", "骨骼腫瘤科", "高壓氧治療中心"] },
+      "曾醫師": { specialty: "運動傷害、膝肩關節", departments: ["運動醫學科", "關節重建科"] },
+      "林醫師": { specialty: "手足部、骨折外傷、兒童骨科", departments: ["手外科", "足踝外科", "骨折創傷科", "兒童骨科"] }
+    };
+    const doctorSpecialty = (doc) => CLINIC_DOCTORS[doc]?.specialty || "";
 
     const timeSlots = ["早上 09:00 - 12:00", "下午 03:00 - 05:00", "晚上 06:00 - 09:00"];
 
@@ -226,9 +238,9 @@
       return lines.join("\r\n");
     }
 
-    // 向後端查詢：某科別未來 7 天（含今天）的醫師班表與剩餘名額
-    async function fetchDepartmentSchedule(department, days = 7) {
-      const res = await fetch(`${API_BASE}/api/schedule/department/${encodeURIComponent(department)}?days=${days}`);
+    // 向後端查詢：全診所所有醫師未來 7 天的班表（直接掛號、指定醫師、改期用）
+    async function fetchClinicSchedule(days = 7) {
+      const res = await fetch(`${API_BASE}/api/schedule/clinic?days=${days}`);
       return res.json();
     }
 
@@ -545,16 +557,15 @@
         return () => { cancelled = true; };
       }, [state, result, preferredDoctor]);
 
-      // 掛號摘要進入「自行選擇」模式時，向後端查詢該科別未來 7 天的完整班表
+      // 掛號摘要進入「自行選擇」模式時，向後端查詢全診所未來 7 天的醫師班表
+      // （editDept 在小診所版用來當「只看某位醫師」的篩選，空字串代表全部醫師）
       useEffect(() => {
         if (!showBookingEdit) return;
-        const dept = editDept || booking.department || DEPARTMENTS[0];
-        setEditDept(dept);
         let cancelled = false;
         setDeptScheduleLoading(true);
         setDeptScheduleError("");
         setDeptSchedule(null);
-        fetchDepartmentSchedule(dept)
+        fetchClinicSchedule()
           .then((data) => {
             if (cancelled) return;
             if (data.status === "success") setDeptSchedule(data);
@@ -567,10 +578,13 @@
             if (!cancelled) setDeptScheduleLoading(false);
           });
         return () => { cancelled = true; };
-      }, [showBookingEdit, editDept]);
+      }, [showBookingEdit]);
 
       function pickScheduleSlot(doctor, date, timeSlotStr) {
-        setBooking({ department: editDept, doctor, date, slot: timeSlotStr });
+        // 問題類型若是這位醫師負責的就保留；否則（例如直接掛號沒有問診）記成醫師的主要類型
+        const depts = CLINIC_DOCTORS[doctor]?.departments || [];
+        const department = depts.includes(booking.department) ? booking.department : (depts[0] || booking.department);
+        setBooking({ department, doctor, date, slot: timeSlotStr });
         setShowBookingEdit(false);
       }
 
@@ -729,8 +743,8 @@
       function detectDoctorMention(content) {
         const t = (content || "").trim();
         if (!t) return null;
-        for (const [doc, depts] of Object.entries(DOCTOR_DEPARTMENTS)) {
-          if (t.includes(doc)) return { department: depts[0], doctor: doc };
+        for (const [doc, info] of Object.entries(CLINIC_DOCTORS)) {
+          if (t.includes(doc)) return { department: info.departments[0], doctor: doc };
         }
         for (const dept of DEPARTMENTS) {
           if (t.includes(dept)) return { department: dept, doctor: null };
@@ -880,8 +894,8 @@
         setPreferredDoctor(doctor || null);
         setResult([[department, 100]]);
         const msg = doctor
-          ? `正在為您查詢 ${doctor}（${department}）最接近的門診時段...`
-          : `正在為您查詢 ${department} 最接近的門診時段...`;
+          ? `正在為您查詢 ${doctor} 最接近的門診時段...`
+          : `正在為您查詢負責${categoryLabel(department)}的醫師最接近的門診時段...`;
         setPrompt(msg); speak(msg);
         setState(STATES.RESULT);
       }
@@ -920,8 +934,8 @@
         setIsDirectBooking(true);
         setBooking({ department: "", doctor: "", date: "", slot: "" });
         setEditDept(""); setDeptSchedule(null); setShowBookingEdit(true);
-        setPrompt("請選擇骨科次專科，查看未來 7 天的醫師班表");
-        speak("已為您切換至直接掛號流程，請先選擇科別");
+        setPrompt("請選擇醫師與看診時段");
+        speak("已為您切換至直接掛號，請選擇醫師與看診時段");
         setState(STATES.PATIENT_INFO);
       }
 
@@ -1084,9 +1098,14 @@
             const calculated = calculate(bp, newAnswers);
             const topDept = calculated[0][0];
             setResult(calculated);
-            setPreferredDoctor(null); // 交給後端在整個科別裡找最快的醫師
-            setPrompt("已完成初步分流分析，正在為您查詢最快的門診時段..."); speak("已完成初步分流分析"); setState(STATES.RESULT);
+            setPreferredDoctor(null); // 交給後端在負責這個問題類型的醫師裡找最快的時段
             callRAG(buildRagQuestion(bp, newAnswers), { body_part: bp, recommended_department: topDept });
+            if (REFERRAL_CATEGORIES[topDept]) {
+              // 小診所處理不了的問題（疑似腫瘤、需高壓氧）：先建議轉診，病人仍可選擇先讓診所醫師評估
+              setPrompt("建議轉診至醫院進一步評估"); speak("您的狀況建議轉診至醫院進一步評估"); setState(STATES.REFERRAL);
+            } else {
+              setPrompt("已完成初步分流分析，正在為您查詢最快的門診時段..."); speak("已完成初步分流分析"); setState(STATES.RESULT);
+            }
           }
         }
       }
@@ -1303,7 +1322,7 @@
           <div className="hero-card">
             <div className="mic-panel">
               <button type="button" className={`mic-btn ${recording ? "recording" : ""}`} onClick={recording ? stopRecord : startRecord}>{recording ? "停止錄音" : "開始語音"}</button>
-              <p className="helper-text">可直接說：「我肩膀痛」、「我膝蓋腫」；也可以直接說「我要掛高醫師」或「我要掛脊椎外科」跳過問診。</p>
+              <p className="helper-text">可直接說：「我肩膀痛」、「我膝蓋腫」；也可以直接說「我要掛高醫師」指定醫師、跳過問診。</p>
               {voiceFailCount >= VOICE_FAIL_THRESHOLD ? (<p className="voice-fallback-hint">🎙️→⌨️ 已自動切換成文字輸入，請直接在下方打字。</p>) : null}
             </div>
             {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
@@ -1319,12 +1338,12 @@
         return (
           <>
             <div className="status-card">
-              <div className="status">你可以透過語音或文字描述骨骼關節症狀，系統將自動執行：<strong>症狀理解 → 問診 → 次專科分流 → RAG 查詢 → 掛號建議</strong></div>
+              <div className="status">你可以透過語音或文字描述骨骼關節症狀，系統將自動執行：<strong>症狀理解 → 問診 → 問題分流 → RAG 查詢 → 推薦醫師掛號</strong></div>
             </div>
             <div className="hero-card">
               <div className="mic-panel">
                 <button type="button" className={`mic-btn ${recording ? "recording" : ""}`} onClick={recording ? stopRecord : startRecord}>{recording ? "停止錄音" : "開始語音"}</button>
-                <p className="helper-text">可直接說：「我肩膀痛」、「我膝蓋腫」；也可以直接說「我要掛高醫師」或「我要掛脊椎外科」跳過問診。</p>
+                <p className="helper-text">可直接說：「我肩膀痛」、「我膝蓋腫」；也可以直接說「我要掛高醫師」指定醫師、跳過問診。</p>
                 {voiceFailCount >= VOICE_FAIL_THRESHOLD ? (<p className="voice-fallback-hint">🎙️→⌨️ 已自動切換成文字輸入，請直接在下方打字。</p>) : null}
               </div>
               {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
@@ -1334,7 +1353,7 @@
               </div>
 
               <div className="link-row">
-                <button type="button" className="link-btn" onClick={startDirectBooking}>⏩ 略過問診，直接選次專科掛號</button>
+                <button type="button" className="link-btn" onClick={startDirectBooking}>⏩ 略過問診，直接選醫師掛號</button>
                 <span className="link-sep">・</span>
                 <button type="button" className="link-btn" onClick={() => {
                   setState(STATES.CHECK_HISTORY);
@@ -1401,12 +1420,12 @@
               ) : hasAiBooking ? (
                 <>
                   <div className="ai-booking-badge">🤖 AI 已為您安排好門診</div>
-                  <div className="ai-booking-row"><span>骨科次專科</span><strong>{booking.department}</strong></div>
                   <div className="ai-booking-row"><span>看診醫師</span><strong>{booking.doctor}</strong></div>
+                  <div className="ai-booking-row"><span>醫師擅長</span><strong>{doctorSpecialty(booking.doctor)}</strong></div>
                   <div className="ai-booking-row"><span>日期時段</span><strong>{booking.date}．{booking.slot}</strong></div>
                 </>
               ) : (
-                <div className="rag-empty">請選擇科別查看門診時段</div>
+                <div className="rag-empty">請選擇醫師與看診時段</div>
               )
             ) : null}
 
@@ -1416,17 +1435,14 @@
 
             {showBookingEdit ? (
               <div className="booking-edit-panel">
-                <div className="booking-info-group">
-                  <label className="field-label">骨科次專科</label>
-                  <select
-                    className="text-input"
-                    value={editDept}
-                    onChange={(e) => { setEditDept(e.target.value); setDeptSchedule(null); }}
-                  >
-                    {DEPARTMENTS.map((dept) => (
-                      <option key={dept} value={dept}>{dept}</option>
-                    ))}
-                  </select>
+                <label className="field-label">選擇醫師</label>
+                <div className="body-legend" style={{ justifyContent: "flex-start", marginTop: 0 }}>
+                  <button type="button" className={`chip ${!editDept ? "active" : ""}`} onClick={() => setEditDept("")}>全部醫師</button>
+                  {Object.entries(CLINIC_DOCTORS).map(([doc, info]) => (
+                    <button type="button" key={doc} className={`chip ${editDept === doc ? "active" : ""}`} onClick={() => setEditDept(doc)} title={info.specialty}>
+                      {doc}<span className="chip-sub">{info.specialty}</span>
+                    </button>
+                  ))}
                 </div>
 
                 {booking.doctor ? (
@@ -1436,7 +1452,7 @@
                 ) : null}
 
                 <div className="field-label" style={{ marginTop: "10px" }}>未來 7 天班表（點選要掛的時段）</div>
-                {renderScheduleGrid(deptSchedule, deptScheduleLoading, deptScheduleError, pickScheduleSlot, null, booking)}
+                {renderScheduleGrid(deptSchedule, deptScheduleLoading, deptScheduleError, pickScheduleSlot, editDept || null, booking)}
               </div>
             ) : null}
           </div>
@@ -1510,7 +1526,7 @@
           setRescheduleDoctor(item.doctor); setRescheduleAnyDoctor(false);
           setRescheduleSchedule(null); setRescheduleScheduleError("");
           setRescheduleScheduleLoading(true);
-          fetchDepartmentSchedule(item.department)
+          fetchClinicSchedule()
             .then((data) => {
               if (data.status === "success") setRescheduleSchedule(data);
               else setRescheduleScheduleError(data.message || "查詢班表失敗");
@@ -1588,7 +1604,8 @@
             <div className="last-visit-card">
               <div className="last-visit-badge">🗂 上次就診紀錄</div>
               <div className="ai-booking-row"><span>看診日期</span><strong>{lastVisit.slot}</strong></div>
-              <div className="ai-booking-row"><span>科別／醫師</span><strong>{lastVisit.department}．{lastVisit.doctor}</strong></div>
+              <div className="ai-booking-row"><span>看診醫師</span><strong>{lastVisit.doctor}</strong></div>
+              <div className="ai-booking-row"><span>問題類型</span><strong>{lastVisit.category_label || categoryLabel(lastVisit.department)}</strong></div>
               {lastVisit.body_part ? <div className="ai-booking-row"><span>不適部位</span><strong>{lastVisit.body_part}</strong></div> : null}
               {lastVisit.main_complaint ? <div className="ai-booking-row"><span>當時主訴</span><strong>{lastVisit.main_complaint}</strong></div> : null}
               {lastVisit.ai_suggestion ? <p className="last-visit-note">AI 建議：{lastVisit.ai_suggestion}</p> : null}
@@ -1650,13 +1667,16 @@
                       return (
                         <div key={idx} style={{ padding: '12px', border: '1px solid #e0e0e0', borderRadius: '8px', backgroundColor: isCancelled ? '#f5f5f5' : '#f9f9f9', opacity: isCancelled ? 0.7 : 1 }}>
                           <p style={{ margin: '0 0 5px 0', fontWeight: 'bold', color: '#1976d2' }}>
-                            {item.appointment_no ? `#${item.appointment_no} ` : ''}{item.department} - {item.doctor}
+                            {item.appointment_no ? `#${item.appointment_no} ` : ''}骨科門診 - {item.doctor}
                             {isCancelled ? <span style={{ marginLeft: '8px', fontSize: '12px', color: '#c0392b', fontWeight: 'bold' }}>已取消</span> : null}
                             {!isCancelled && isPast ? <span style={{ marginLeft: '8px', fontSize: '12px', color: '#059669', fontWeight: 'bold' }}>已看診</span> : null}
                             {!isCancelled && !isPast ? <span style={{ marginLeft: '8px', fontSize: '12px', color: '#1d4ed8', fontWeight: 'bold' }}>即將看診</span> : null}
                           </p>
                           <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}>看診時間：{item.slot}</p>
-                          {item.main_complaint ? <p style={{ margin: '0 0 5px 0', fontSize: '13px', color: '#555' }}>主訴：{item.body_part ? `${item.body_part}／` : ''}{item.main_complaint}</p> : null}
+                          <p style={{ margin: '0 0 5px 0', fontSize: '13px', color: '#555' }}>
+                            問題類型：{item.category_label || categoryLabel(item.department)}
+                            {item.main_complaint ? `｜主訴：${item.main_complaint}` : ''}
+                          </p>
                           <p style={{ margin: '0', fontSize: '12px', color: '#888' }}>預約者：{item.name} | 預約建立於：{item.created_at}</p>
 
                           {!isCancelled && !isPast ? (
@@ -1681,10 +1701,10 @@
                                     setRescheduleDoctor(item.doctor); setRescheduleDate(""); setRescheduleSlot("");
                                   }}
                                 />
-                                也可以改掛{item.department}的其他醫師
+                                也可以改掛診所其他醫師
                               </label>
                               <label className="field-label" style={{ display: 'block' }}>
-                                {rescheduleAnyDoctor ? `${item.department}所有醫師` : item.doctor} 未來 7 天班表（點選新時段）
+                                {rescheduleAnyDoctor ? "所有醫師" : item.doctor} 未來 7 天班表（點選新時段）
                               </label>
                               {renderScheduleGrid(
                                 rescheduleSchedule, rescheduleScheduleLoading, rescheduleScheduleError,
@@ -1798,7 +1818,7 @@
                 {department ? (
                   <div className="ai-booking-summary" style={{ marginTop: '14px' }}>
                     <div className="ai-booking-badge">🤖 依拍攝部位建議</div>
-                    <div className="ai-booking-row"><span>建議骨科次專科</span><strong>{department}</strong></div>
+                    <div className="ai-booking-row"><span>問題類型</span><strong>{categoryLabel(department)}</strong></div>
                     <p className="helper-text" style={{ margin: '8px 0 0' }}>看診時記得帶著 X 光片（或光碟），讓醫師直接判讀。</p>
                   </div>
                 ) : null}
@@ -1971,12 +1991,12 @@
                 }}>
                   <span className="intent-emoji">🩺</span>
                   <span className="intent-title">不確定看哪科</span>
-                  <span className="intent-desc">用症狀問診，AI 幫你分流次專科</span>
+                  <span className="intent-desc">用症狀問診，AI 幫你判斷問題並推薦醫師</span>
                 </button>
                 <button type="button" className="intent-btn" onClick={startDirectBooking}>
                   <span className="intent-emoji">🎯</span>
-                  <span className="intent-title">我知道要掛哪科／哪位醫師</span>
-                  <span className="intent-desc">直接選次專科與醫師掛號</span>
+                  <span className="intent-title">直接掛號／指定醫師</span>
+                  <span className="intent-desc">直接選醫師與看診時段</span>
                 </button>
                 <button type="button" className="intent-btn" onClick={() => {
                   setState(STATES.CHECK_HISTORY);
@@ -2004,7 +2024,7 @@
                 {voiceFailCount >= VOICE_FAIL_THRESHOLD ? (<p className="voice-fallback-hint">🎙️→⌨️ 已自動切換成文字輸入，請直接在下方打字。</p>) : null}
                 {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
                 <div className="input-row">
-                  <input className="text-input" ref={textInputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="或直接輸入症狀／科別／醫師姓名" onKeyDown={(e) => { if (e.key === "Enter") submitManualInput(); }} />
+                  <input className="text-input" ref={textInputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="或直接輸入症狀或醫師姓名" onKeyDown={(e) => { if (e.key === "Enter") submitManualInput(); }} />
                   <button type="button" className="mini-btn" onClick={submitManualInput}>送出</button>
                 </div>
               </div>
@@ -2024,7 +2044,7 @@
                 <button type="button" className="secondary-btn" onClick={() => analyzeSymptom("症狀不明確")}>無法確定不適部位</button>
               </div>
               <div className="link-row">
-                <button type="button" className="link-btn" onClick={startDirectBooking}>⏩ 直接選次專科掛號</button>
+                <button type="button" className="link-btn" onClick={startDirectBooking}>⏩ 直接選醫師掛號</button>
                 <span className="link-sep">・</span>
                 <button type="button" className="link-btn" onClick={resetAll}>⬅ 回主畫面</button>
               </div>
@@ -2088,13 +2108,45 @@
           );
         }
 
+        if (state === STATES.REFERRAL) {
+          const topDept = result[0]?.[0];
+          return (
+            <>
+              <div className="notice-box referral-box">
+                <h3>🏥 建議轉診至醫院</h3>
+                <p>問題類型：<strong>{categoryLabel(topDept)}</strong></p>
+                <p>{REFERRAL_CATEGORIES[topDept]}</p>
+                <p className="alert-disclaimer">轉診時請攜帶先前的檢查報告或影像；若症狀快速惡化，請立即就醫。</p>
+              </div>
+              {renderRagSection()}
+              <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+                <button type="button" className="secondary-btn" style={{ margin: 0, flex: 1 }} onClick={resetAll}>我了解，返回主畫面</button>
+                <button type="button" className="btn" style={{ margin: 0, flex: 1 }} onClick={() => {
+                  setPrompt("正在為您查詢診所醫師最快的門診時段...");
+                  speak("好的，先為您安排診所醫師初步評估");
+                  setState(STATES.RESULT);
+                }}>先讓診所醫師初步評估</button>
+              </div>
+            </>
+          );
+        }
+
         if (state === STATES.RESULT) {
           return (
             <>
               <div className="result-card summary-card">
-                <h4>初步分流結果</h4>
-                <p className="result-headline">建議掛號：<strong>骨科・{result[0]?.[0] || "脊椎外科"}</strong></p>
-                {result.map((item, idx) => {
+                <h4>{preferredDoctor ? "指定醫師掛號" : "初步分流結果"}</h4>
+                {preferredDoctor ? (
+                  <p className="result-headline">指定醫師：<strong>{preferredDoctor}</strong><span className="result-sub">（擅長：{doctorSpecialty(preferredDoctor)}）</span></p>
+                ) : (
+                  <>
+                    <p className="result-headline">問題類型：<strong>{categoryLabel(result[0]?.[0] || "脊椎外科")}</strong></p>
+                    {booking.doctor && !aiAssignLoading ? (
+                      <p className="result-doctor">推薦醫師：<strong>{booking.doctor}</strong><span>（擅長：{doctorSpecialty(booking.doctor)}）</span></p>
+                    ) : null}
+                  </>
+                )}
+                {!preferredDoctor && result.map((item, idx) => {
                   const department = Array.isArray(item) ? item[0] : item;
                   const score = Array.isArray(item) ? item[1] : 80;
                   const percent = Math.min(100, Math.round((score / 80) * 100));
@@ -2102,7 +2154,7 @@
                   return (
                     <div className="confidence" key={department}>
                       <div className="confidence-row">
-                        <span className="confidence-label">#{idx + 1} {department}</span>
+                        <span className="confidence-label">#{idx + 1} {categoryLabel(department)}</span>
                         <span className={`confidence-value level-${level === "高" ? "high" : level === "中" ? "mid" : "low"}`}>推薦程度：{level}</span>
                       </div>
                       <div className="confidence-bar"><div className="confidence-bar-fill" style={{ width: `${percent}%` }} /></div>
@@ -2110,7 +2162,7 @@
                   );
                 })}
               </div>
-              {renderRagSection()}
+              {!preferredDoctor ? renderRagSection() : null}
               <button type="button" className="btn" onClick={() => {
                 setPrompt("AI 已完成推薦，請填寫基本資料完成掛號");
                 speak("問診完成，AI 已為您安排門診，請填寫基本資料");
@@ -2176,7 +2228,7 @@
               <div className="result-card summary-card" style={{ border: '2px dashed #4caf50', backgroundColor: '#f9fff9', padding: '20px' }}>
                 <h4 style={{ color: '#2e7d32', textAlign: 'center', marginBottom: '15px' }}>預約成功證明</h4>
                 <p><strong>姓名：</strong> {patientInfo.name}</p>
-                <p><strong>骨科次專科：</strong> {booking.department}</p>
+                <p><strong>門診：</strong> 骨科{booking.department ? `（${categoryLabel(booking.department)}）` : ""}</p>
                 <p><strong>醫師：</strong> {booking.doctor}</p>
                 <p><strong>日期：</strong> {booking.date}</p>
                 <p><strong>時間：</strong> {booking.slot}</p>

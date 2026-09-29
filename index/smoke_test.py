@@ -9,7 +9,7 @@
 3. 掛號紀錄查詢得到剛剛掛的號
 4. 改期功能正常，且改到醫師沒排班的時段會被擋下
 5. 取消功能正常，且不是本人的掛號無法取消
-5b. 上次就診紀錄欄位存在、改期不能改掛其他科的醫師、修改聯絡手機需要生日相符
+5b. 上次就診紀錄欄位存在、改期可改掛診所其他醫師（不存在的醫師會被擋）、修改聯絡手機需要生日相符
 5c. 查詢需要身分證＋生日；不能用別人的身分證字號＋假生日掛號來改掉對方的生日
 5d. RAG 帶入分流結果時，會回報知識庫是否支持分流結果
 6. 密碼雜湊機制正確（雜湊/比對本身，不需要知道真實管理員密碼）
@@ -174,7 +174,12 @@ def main():
             "/api/booking/reschedule",
             json={"id_number": TEST_ID_NUMBER, "birth_date": TEST_BIRTH, "appointment_no": reschedule_no, "new_slot": "2099-01-05 早上 09:00 - 12:00", "new_doctor": "張醫師"},
         )
-        check("改期時不能改掛其他科的醫師", res.status_code == 200 and res.json().get("status") == "error")
+        check("改期時不能改掛不存在的醫師", res.status_code == 200 and res.json().get("status") == "error")
+        res = client.post(
+            "/api/booking/reschedule",
+            json={"id_number": TEST_ID_NUMBER, "birth_date": TEST_BIRTH, "appointment_no": reschedule_no, "new_slot": "2099-01-05 晚上 06:00 - 09:00", "new_doctor": "林醫師"},
+        )
+        check("改期時可以改掛診所其他醫師（林醫師週一晚上）", res.status_code == 200 and res.json().get("status") == "success")
         res = client.post("/api/patient/update", json={"id_number": TEST_ID_NUMBER, "birth_date": "1990/01/02", "phone": "0987654321"})
         check("生日不符時不能修改聯絡手機", res.status_code == 200 and res.json().get("status") == "error")
         res = client.post("/api/patient/update", json={"id_number": TEST_ID_NUMBER, "birth_date": "1990/01/01", "phone": "0987654321"})

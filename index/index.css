@@ -1735,3 +1735,31 @@ select:focus {
 .rag-answer-card p + p {
   margin-top: 6px;
 }
+
+/* ===== 小診所版：推薦醫師、轉診、醫師篩選 ===== */
+.result-doctor {
+  margin: -6px 0 14px !important;
+  font-size: 15.5px;
+}
+
+.result-doctor span {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.referral-box p + p {
+  margin-top: 8px;
+}
+
+.chip-sub {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.result-sub {
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 600;
+}

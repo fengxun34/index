@@ -30,12 +30,41 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# 骨科次專科清單（與 sql/schema.sql 的 CHECK 條件一致）
+# ===== 小診所設定 =====
+# 系統目標是社區型骨科診所：病人畫面只看到「問題類型＋推薦醫師」，不會出現大醫院的次專科名稱。
+# 下面這 10 個類別是 AI 分流的「內部問題類型」，用來決定推薦哪位醫師、要不要建議轉診，
+# 也存在 appointments.department 欄位（與 sql/schema.sql 的 CHECK 條件一致，不需要改資料庫）。
+CLINIC_NAME = "骨科診所"
+
 ALLOWED_DEPARTMENTS = [
     "脊椎外科", "運動醫學科", "關節重建科", "手外科",
     "足踝外科", "骨折創傷科", "骨質疏鬆症門診",
     "兒童骨科", "骨骼腫瘤科", "高壓氧治療中心",
 ]
+
+# 內部問題類型 → 給病人看的白話名稱
+CATEGORY_LABELS = {
+    "脊椎外科": "脊椎（頸椎、腰椎）",
+    "運動醫學科": "運動傷害",
+    "關節重建科": "關節退化",
+    "手外科": "手部（手腕、手指）",
+    "足踝外科": "足踝",
+    "骨折創傷科": "骨折、外傷",
+    "骨質疏鬆症門診": "骨質疏鬆",
+    "兒童骨科": "兒童骨骼",
+    "骨骼腫瘤科": "疑似骨骼腫瘤",
+    "高壓氧治療中心": "需高壓氧治療",
+}
+
+# 小診所通常無法處理、建議轉診到大醫院的問題類型（病人仍可選擇先讓診所醫師初步評估）
+REFERRAL_CATEGORIES = {
+    "骨骼腫瘤科": "骨骼腫瘤需要進一步影像與病理檢查，建議轉診至醫學中心骨科（骨腫瘤專科）。",
+    "高壓氧治療中心": "本診所沒有高壓氧設備，建議轉診至設有高壓氧治療中心的醫院。",
+}
+
+
+def category_label(department: str) -> str:
+    return CATEGORY_LABELS.get(department, department or "")
 
 # 每個看診時段最多可掛號人數
 MAX_PATIENTS_PER_SLOT = 4
@@ -128,25 +157,27 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "vector_store.db")
 PKL_PATH = os.path.join(BASE_DIR, "vectorizer.pkl")
 
-# ===== 醫師資料（擅長科別可複選 + 每週固定看診時段） =====
+# ===== 診所醫師（擅長的問題類型可複選 + 每週固定看診時段） =====
 # weekly 的 key 是星期幾（0=一, 1=二, 2=三, 3=四, 4=五, 5=六, 6=日），
 # value 是當天有看診的時段代碼列表，取值只能是 "早上"／"下午"／"晚上"。
-# 一位醫師可以有多個擅長科別（departments 是列表）。
+# departments 是這位醫師負責的「內部問題類型」，AI 分流後依此推薦醫師；
+# specialty 是顯示給病人看的擅長項目。每個問題類型至少要有一位醫師負責。
 DOCTORS = {
-    "高醫師": {"departments": ["脊椎外科"], "weekly": {0: ["早上", "下午"], 2: ["早上", "下午"], 4: ["早上", "下午"]}},
-    "謝醫師": {"departments": ["脊椎外科"], "weekly": {1: ["下午", "晚上"], 3: ["下午", "晚上"]}},
-    "曾醫師": {"departments": ["運動醫學科"], "weekly": {0: ["早上", "晚上"], 3: ["早上", "晚上"]}},
-    "蔡醫師": {"departments": ["運動醫學科"], "weekly": {2: ["下午"], 4: ["下午"]}},
-    "林醫師": {"departments": ["關節重建科", "骨質疏鬆症門診"], "weekly": {1: ["早上", "下午"], 3: ["早上", "下午"], 5: ["早上"]}},
-    "鍾醫師": {"departments": ["關節重建科"], "weekly": {0: ["晚上"], 2: ["晚上"]}},
-    "張醫師": {"departments": ["手外科"], "weekly": {0: ["早上"], 1: ["早上"], 2: ["早上"], 3: ["早上"], 4: ["早上"]}},
-    "王醫師": {"departments": ["足踝外科", "運動醫學科"], "weekly": {1: ["下午", "晚上"], 3: ["下午", "晚上"], 5: ["下午"]}},
-    "陳醫師": {"departments": ["骨折創傷科", "兒童骨科"], "weekly": {0: ["早上"], 2: ["早上"], 4: ["早上"]}},
-    "徐醫師": {"departments": ["骨折創傷科"], "weekly": {1: ["晚上"], 3: ["晚上"], 5: ["晚上"]}},
-    "吳醫師": {"departments": ["骨質疏鬆症門診"], "weekly": {0: ["早上", "下午"], 3: ["早上", "下午"]}},
-    "周醫師": {"departments": ["兒童骨科"], "weekly": {1: ["早上", "下午"], 4: ["早上", "下午"]}},
-    "楊醫師": {"departments": ["骨骼腫瘤科"], "weekly": {2: ["下午", "晚上"], 5: ["下午", "晚上"]}},
-    "洪醫師": {"departments": ["高壓氧治療中心"], "weekly": {0: ["早上", "晚上"], 3: ["早上", "晚上"]}},
+    "高醫師": {
+        "specialty": "脊椎、骨質疏鬆",
+        "departments": ["脊椎外科", "骨質疏鬆症門診", "骨骼腫瘤科", "高壓氧治療中心"],
+        "weekly": {0: ["早上", "下午"], 2: ["早上", "下午"], 4: ["早上", "下午"]},
+    },
+    "曾醫師": {
+        "specialty": "運動傷害、膝肩關節",
+        "departments": ["運動醫學科", "關節重建科"],
+        "weekly": {1: ["下午", "晚上"], 3: ["下午", "晚上"], 5: ["早上"]},
+    },
+    "林醫師": {
+        "specialty": "手足部、骨折外傷、兒童骨科",
+        "departments": ["手外科", "足踝外科", "骨折創傷科", "兒童骨科"],
+        "weekly": {0: ["晚上"], 1: ["早上"], 2: ["晚上"], 3: ["早上"], 4: ["晚上"], 5: ["早上"]},
+    },
 }
 
 # 醫師班表「例外」調整（請假／代診／臨時加開）。
@@ -392,6 +423,7 @@ def rag_answer(req: AnswerRequest):
     def to_chunk(i, s):
         return {
             "department": departments[i],
+            "category_label": category_label(departments[i]),
             "content": contents[i],
             "score": s,
             "supports_triage": recommended is not None and departments[i] == recommended,
@@ -403,7 +435,7 @@ def rag_answer(req: AnswerRequest):
     # 沒有分流結果可以對照（例如單純查詢）：照舊直接回傳最相似的科別
     if recommended is None:
         return {
-            "answer": f"根據您的描述，建議掛【骨科・{top_dept}】",
+            "answer": f"根據您的描述，較可能是【{category_label(top_dept)}】相關問題，建議由骨科醫師評估。",
             "retrieved_chunks": hits,
             "agreement": None,
         }
@@ -418,15 +450,15 @@ def rag_answer(req: AnswerRequest):
     advice = _extract_advice(contents[supporting[0]]) if supporting else ""
     if top_dept == recommended:
         agreement = "agree"
-        answer = f"知識庫也支持這個判斷：您的描述與【骨科・{recommended}】的常見狀況最相符。"
+        answer = f"知識庫也支持這個判斷：您的描述與【{category_label(recommended)}】的常見狀況最相符。"
     elif supporting and supporting[1] >= top_score * 0.5:
         agreement = "partial"
-        answer = (f"建議依分流結果掛【骨科・{recommended}】，知識庫也找到相關資料；"
-                  f"另外提示您的描述也與【{top_dept}】有關，看診時可與醫師討論。")
+        answer = (f"知識庫也找到【{category_label(recommended)}】的相關資料；"
+                  f"另外提示您的描述也與【{category_label(top_dept)}】有關，看診時可與醫師討論。")
     else:
         agreement = "differ"
-        answer = (f"建議先依分流結果掛【骨科・{recommended}】。"
-                  f"知識庫另外提示可能與【{top_dept}】有關，看診時可向醫師提出。")
+        answer = (f"分流判斷為【{category_label(recommended)}】；"
+                  f"知識庫另外提示可能與【{category_label(top_dept)}】有關，看診時可向醫師提出。")
     if advice:
         answer += f"\n參考建議：{advice}。"
 
@@ -436,6 +468,54 @@ def rag_answer(req: AnswerRequest):
         "agreement": agreement,
         "recommended_department": recommended,
     }
+
+@app.get("/api/clinic/info")
+def get_clinic_info():
+    """診所基本資料：醫師名單與擅長項目、問題類型白話名稱、需轉診的問題類型（前端顯示用）。"""
+    return {
+        "clinic_name": CLINIC_NAME,
+        "doctors": [
+            {"name": name, "specialty": info.get("specialty", ""), "departments": info["departments"]}
+            for name, info in DOCTORS.items()
+        ],
+        "category_labels": CATEGORY_LABELS,
+        "referral_categories": REFERRAL_CATEGORIES,
+    }
+
+
+@app.get("/api/schedule/clinic")
+def get_clinic_schedule(days: int = 7):
+    """回傳全診所所有醫師未來 N 天的班表與剩餘名額（直接掛號、指定醫師時使用）。"""
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+
+    doctors = list(DOCTORS.keys())
+    now = datetime.now()
+    today = now.date()
+    capacity = get_capacity_map(doctors, today, today + timedelta(days=days - 1))
+
+    result_days = []
+    for offset in range(days):
+        check_date = today + timedelta(days=offset)
+        date_str = check_date.isoformat()
+        slots = []
+        for session in SESSION_ORDER:
+            for doc in doctors:
+                if session not in get_doctor_sessions(doc, check_date) or not is_session_bookable_now(check_date, session, now):
+                    continue
+                time_slot = SESSION_TIME_MAP[session]
+                used = capacity.get((doc, date_str, time_slot), 0)
+                slots.append({
+                    "doctor": doc,
+                    "session": session,
+                    "time_slot": time_slot,
+                    "remaining": max(MAX_PATIENTS_PER_SLOT - used, 0),
+                    "full": used >= MAX_PATIENTS_PER_SLOT,
+                })
+        result_days.append({"date": date_str, "weekday": WEEKDAY_LABELS[check_date.weekday()], "slots": slots})
+
+    return {"status": "success", "doctors": doctors, "days": result_days}
+
 
 @app.get("/api/schedule/department/{department}")
 def get_department_schedule(department: str, days: int = 7):
@@ -493,7 +573,7 @@ def get_next_available_slot(department: str, doctor: Optional[str] = None, days:
     candidates = [doctor] if doctor else get_doctors_by_department(department)
     candidates = [d for d in candidates if d in DOCTORS and department in DOCTORS[d]["departments"]]
     if not candidates:
-        return {"status": "error", "message": f"{department} 目前查無可掛號醫師"}
+        return {"status": "error", "message": "目前查無可掛號的醫師，請聯絡診所。"}
 
     now = datetime.now()
     today = now.date()
@@ -515,7 +595,9 @@ def get_next_available_slot(department: str, doctor: Optional[str] = None, days:
                     return {
                         "status": "success",
                         "department": department,
+                        "category_label": category_label(department),
                         "doctor": doc,
+                        "doctor_specialty": DOCTORS[doc].get("specialty", ""),
                         "date": date_str,
                         "session": session,
                         "time_slot": time_slot,
@@ -523,7 +605,7 @@ def get_next_available_slot(department: str, doctor: Optional[str] = None, days:
                         "remaining": MAX_PATIENTS_PER_SLOT - used,
                     }
 
-    return {"status": "error", "message": f"{department} 未來{days}天內查無可掛號時段，請聯絡診所。"}
+    return {"status": "error", "message": f"未來{days}天內查無可掛號時段，請聯絡診所。"}
 
 
 @app.post("/api/booking/confirm")
@@ -534,8 +616,9 @@ def confirm_booking(req: BookingRequest):
     doctor_info = DOCTORS.get(req.doctor)
     if not doctor_info:
         return {"status": "error", "message": f"查無此醫師：{req.doctor}"}
-    if req.department not in doctor_info["departments"]:
-        return {"status": "error", "message": f"{req.doctor} 並非{req.department}的醫師"}
+    # 小診所情境：病人可以指定任何一位醫師。問題類型不在這位醫師的擅長項目時，
+    # 改記成醫師的主要類型，讓 department 欄位永遠對得上醫師（後台與班表查詢才不會亂）
+    department = req.department if req.department in doctor_info["departments"] else doctor_info["departments"][0]
 
     appointment_date, time_slot = (req.slot.split(" ", 1) + [""])[:2]
     time_slot = time_slot or req.slot
@@ -579,7 +662,7 @@ def confirm_booking(req: BookingRequest):
         try:
             appt_res = supabase.rpc("book_appointment_slot", {
                 "p_patient_id": patient_id,
-                "p_department": req.department,
+                "p_department": department,
                 "p_doctor": req.doctor,
                 "p_appointment_date": appointment_date,
                 "p_time_slot": time_slot,
@@ -648,6 +731,7 @@ def get_booking_history(req: HistoryRequest):
                 "name": patient["name"],
                 "appointment_no": a.get("appointment_no"),
                 "department": a["department"],
+                "category_label": category_label(a["department"]),
                 "doctor": a["doctor"],
                 "appointment_date": a["appointment_date"],
                 "time_slot": a["time_slot"],
@@ -729,12 +813,14 @@ def reschedule_booking(req: RescheduleRequest):
             return {"status": "error", "message": "此掛號目前狀態無法改期。"}
 
         doctor = req.new_doctor or appt["doctor"]
+        new_department = appt["department"]
         if doctor != appt["doctor"]:
             doctor_info = DOCTORS.get(doctor)
             if not doctor_info:
                 return {"status": "error", "message": f"查無此醫師：{doctor}"}
-            if appt["department"] not in doctor_info["departments"]:
-                return {"status": "error", "message": f"{doctor} 並非{appt['department']}的醫師，無法改掛。"}
+            # 診所內任何醫師都可以改掛；問題類型不在新醫師擅長項目時，改記成新醫師的主要類型
+            if new_department not in doctor_info["departments"]:
+                new_department = doctor_info["departments"][0]
         new_date, new_time_slot = (req.new_slot.split(" ", 1) + [""])[:2]
         new_time_slot = new_time_slot or req.new_slot
         try:
@@ -760,6 +846,7 @@ def reschedule_booking(req: RescheduleRequest):
 
         supabase.table("appointments").update({
             "doctor": doctor,
+            "department": new_department,
             "appointment_date": new_date,
             "time_slot": new_time_slot,
         }).eq("id", appt["id"]).execute()
@@ -862,7 +949,7 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
             tr_html += (
                 f"<tr><td>{esc(r.get('appointment_no'))}</td><td>{esc(patient.get('patient_no'))}</td>"
                 f"<td>{esc(patient.get('name'))}</td><td>{esc(patient.get('id_number'))}</td>"
-                f"<td>{esc(r['department'])}</td><td>{esc(r['doctor'])}</td>"
+                f"<td>{esc(category_label(r['department']))}</td><td>{esc(r['doctor'])}</td>"
                 f"<td>{esc(r['appointment_date'])} {esc(r['time_slot'])}</td><td>{esc(r['created_at'])}</td>"
                 f"<td>{status_html}</td><td style=\"text-align:center;\">{visit_count}</td>"
                 f"<td>{triage_html}</td></tr>"
@@ -896,7 +983,7 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
         </head>
         <body>
             <div class="container">
-                <h2>🦴 骨科診所掛號總覽後台</h2>
+                <h2>🦴 {esc(CLINIC_NAME)}掛號總覽後台</h2>
                 <div class="subtitle">目前系統內共有 <strong>{len(rows)}</strong> 筆掛號紀錄</div>
 
                 {f'''
@@ -907,7 +994,7 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
                             <th>病歷號</th>
                             <th>病患姓名</th>
                             <th>身分證字號</th>
-                            <th>骨科次專科</th>
+                            <th>問題類型</th>
                             <th>看診醫師</th>
                             <th>預約時段</th>
                             <th>掛號建立時間</th>
