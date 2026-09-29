@@ -1763,3 +1763,47 @@ select:focus {
   font-size: 13.5px;
   font-weight: 600;
 }
+
+/* ===== 語音操作（選時段／確認掛號／查詢紀錄） ===== */
+.voice-command {
+  margin: 12px 0;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(239, 246, 255, 0.8);
+  border: 1px solid #bfdbfe;
+  text-align: center;
+}
+
+.voice-cmd-btn {
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.2);
+}
+
+.voice-cmd-btn.recording {
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.35); }
+  50% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
+}
+
+.voice-cmd-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.voice-command .input-echo {
+  margin: 10px 0 0;
+  text-align: left;
+}
