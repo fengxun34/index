@@ -1706,3 +1706,39 @@ select:focus {
   color: var(--primary-strong);
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
 }
+
+/* ===== 分流推薦程度（取代百分比） ===== */
+.confidence-value.level-high { color: #047857; }
+.confidence-value.level-mid { color: #b45309; }
+.confidence-value.level-low { color: var(--muted); }
+
+.confidence-note {
+  margin: 12px 0 0 !important;
+  font-size: 12.5px !important;
+  color: var(--muted) !important;
+  line-height: 1.6;
+}
+
+/* ===== RAG：知識庫是否支持分流結果 ===== */
+.rag-agreement {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.rag-agreement.agree {
+  background: rgba(16, 185, 129, 0.18);
+  color: #6ee7b7;
+}
+
+.rag-agreement.hint {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
+}
+
+.rag-answer-card p + p {
+  margin-top: 6px;
+}

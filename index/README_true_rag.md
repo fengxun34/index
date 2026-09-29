@@ -6,14 +6,19 @@
 
 ## 1. 功能範圍
 
-- 骨科次專科智慧問診分流：脊椎外科、運動醫學科、關節重建科、手外科、足踝外科、骨折創傷科、骨質疏鬆症門診
+- 骨科次專科智慧問診分流：脊椎外科、運動醫學科、關節重建科、手外科、足踝外科、骨折創傷科、骨質疏鬆症門診、
+  兒童骨科、骨骼腫瘤科、高壓氧治療中心（結果以「推薦程度：高／中／低」呈現，不顯示容易被誤解成機率的百分比）
 - 語音／文字雙模式問診（Web Speech API）
-- RAG 醫療知識檢索（TF-IDF + cosine similarity，本地 SQLite 向量庫）
+- RAG 醫療知識檢索（TF-IDF + cosine similarity，本地 SQLite 向量庫，63 筆骨科知識）：
+  以「部位＋主訴＋所有問診回答」檢索，並對照規則分流結果，回報知識庫是否支持該科別，
+  不會另外算出一個跟分流結果打架的答案；檢索來源與相似度預設收起，點開才顯示
+- 個資保護：查詢、取消、改期、修改手機都需「身分證字號＋生日」相符，連續驗證失敗 5 次鎖定 15 分鐘；
+  已有資料的身分證字號，掛號時生日也必須相符（避免冒用他人身分證字號改掉生日）
 - 骨科門診掛號、掛號紀錄查詢、後台掛號總覽（病人資料與掛號紀錄存於 Supabase）
 - 掛號欄位驗證（身分證字號、手機格式、科別）與同時段容額上限（避免同一時段被無限重複預約）
 - 病歷號／掛號序號採連續編號，方便人工對照；AI 問診過程（部位、問答、AI 建議）會隨掛號存檔，後台可查看
 - 上次就診紀錄：查詢掛號時顯示最近一次已看診的科別、醫師、主訴與 AI 建議，可一鍵回診掛同一位醫師
-- 修改預約資訊：改期時可改掛同科別的其他醫師；可修改聯絡手機（需身分證字號＋生日相符）
+- 修改預約資訊：改期時可改掛同科別的其他醫師；可修改聯絡手機
 - X 光辨識器（示範版，**目前停用**，首頁不顯示；要開放時把 `index.html` 的 `ENABLE_XRAY` 改成 `true`）：上傳／拍攝 X 光片，檢查是否為灰階 X 光影像、提供亮度／對比／放大／反相檢視，
   並依拍攝部位建議次專科、直接帶去掛號。**不會自動判讀骨折或病灶**，圖片只在使用者裝置上處理、不上傳
 - 復健／用藥提醒：存在使用者裝置（localStorage），網頁開著時定時跳出提醒＋語音播報，
@@ -99,11 +104,14 @@ python smoke_test.py
 `POST /rag/answer`
 ```json
 {
-  "question": "主訴部位：腰椎；主訴描述：腰痛 合併 腳麻；系統建議次專科：脊椎外科。請給掛號建議",
+  "question": "部位：腰椎。腰痛。悶痛。會延伸到腿，腳麻。一週",
   "top_k": 3,
   "metadata": { "body_part": "腰椎", "recommended_department": "脊椎外科" }
 }
 ```
+有帶 `recommended_department`（規則分流的結果）時，回傳的 `agreement` 表示知識庫是否支持分流結果：
+`agree`（知識庫最相符的也是這一科）、`partial`（有相關資料，但另一科更相符，列為補充提示）、
+`differ`（知識庫另外提示其他科）。`retrieved_chunks` 裡 `supports_triage: true` 的片段就是支持分流結果的依據。
 
 ### 確認掛號（寫入 Supabase：patients + appointments）
 `POST /api/booking/confirm`
@@ -122,8 +130,9 @@ python smoke_test.py
 ### 查詢個人掛號紀錄
 `POST /api/booking/history`
 ```json
-{ "id_number": "A123456789" }
+{ "id_number": "A123456789", "birth_date": "1990/01/01" }
 ```
+以下查詢、取消、改期、修改手機都需要 `birth_date`；查無此人與生日不符回傳同一句訊息，不透露該身分證字號是否掛過號。
 
 回傳 `data`（所有掛號，含 `is_past` 與當次問診的 `body_part`／`main_complaint`／`ai_suggestion`）
 與 `last_visit`（最近一次已看診、未取消的掛號，沒有則為 `null`）。
@@ -131,7 +140,7 @@ python smoke_test.py
 ### 改期（可同時改掛同科別其他醫師）
 `POST /api/booking/reschedule`
 ```json
-{ "id_number": "A123456789", "appointment_no": 12, "new_slot": "2026-08-21 下午 03:00 - 05:00", "new_doctor": "王醫師" }
+{ "id_number": "A123456789", "birth_date": "1990/01/01", "appointment_no": 12, "new_slot": "2026-08-21 下午 03:00 - 05:00", "new_doctor": "王醫師" }
 ```
 `new_doctor` 選填，不給就維持原醫師；新醫師必須擅長原掛號的科別。
 
@@ -140,7 +149,12 @@ python smoke_test.py
 ```json
 { "id_number": "A123456789", "birth_date": "1990/01/01", "phone": "0987654321" }
 ```
-生日需與掛號時填寫的相符才能修改。
+
+### 取消掛號
+`POST /api/booking/cancel`
+```json
+{ "id_number": "A123456789", "birth_date": "1990/01/01", "appointment_no": 12 }
+```
 
 ### 查詢某科別未來 7 天班表（含剩餘名額）
 `GET /api/schedule/department/{department}?days=7`

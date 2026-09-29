@@ -67,11 +67,11 @@ create index if not exists idx_triage_records_patient_id on triage_records(patie
 create index if not exists idx_triage_records_appointment_id on triage_records(appointment_id);
 
 -- ---------- 後台管理員帳號表 ----------
--- 密碼請用 set_admin_password.py 設定，資料庫存的就是你設定的密碼原文。
+-- 密碼請用 set_admin_password.py 設定，資料庫只存 PBKDF2-SHA256 雜湊值，不存密碼原文。
 create table if not exists admin_users (
     id uuid primary key default gen_random_uuid(),
     username text not null unique,
-    password text not null,               -- 明文密碼，由 set_admin_password.py 寫入
+    password text not null,               -- 密碼雜湊（格式：pbkdf2_sha256$迭代次數$salt$hash），由 set_admin_password.py 寫入
     created_at timestamptz not null default now()
 );
 
