@@ -8,6 +8,7 @@ import secrets
 import hashlib
 import html as html_lib
 import httpx
+import traceback
 from collections import defaultdict
 from datetime import datetime, timedelta
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -19,6 +20,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
 from supabase import create_client, Client
+from postgrest.exceptions import APIError
 
 load_dotenv()
 
@@ -40,19 +42,58 @@ DB_UNREACHABLE_MESSAGE = (
 )
 
 
+def explain_db_error(e: Exception) -> Optional[str]:
+    """把 Supabase 常見錯誤翻成看得懂的原因與處理方式；不認得的錯誤回傳 None。"""
+    if isinstance(e, httpx.HTTPError):
+        return DB_UNREACHABLE_MESSAGE
+    if not isinstance(e, APIError):
+        return None
+    code = str(e.code or "")
+    text = " ".join(str(x or "") for x in (e.message, e.details, e.hint)).lower()
+    if code in ("42P01", "PGRST205") or "does not exist" in text or "could not find the table" in text:
+        return "Supabase 資料庫還沒建立資料表：請到 Supabase 專案的 SQL Editor，貼上並執行 sql/schema.sql。"
+    if code in ("42703", "PGRST204") or "column" in text and ("not exist" in text or "could not find" in text):
+        return "Supabase 資料表缺少欄位（可能是舊版資料表）：請到 SQL Editor 執行 sql/002_add_sequential_ids_and_triage.sql 與 sql/003_atomic_slot_capacity.sql。"
+    if code in ("42883", "PGRST202") or "book_appointment_slot" in text:
+        return "Supabase 缺少掛號用的資料庫函式：請到 SQL Editor 執行 sql/003_atomic_slot_capacity.sql。"
+    if code in ("401", "403") or "invalid api key" in text or "jwt" in text or "permission denied" in text:
+        return "Supabase 金鑰不正確或權限不足：請確認 .env 的 SUPABASE_SERVICE_ROLE_KEY 是 service_role key（不是 anon key），修改後重新啟動後端。"
+    if code in ("540", "503", "502", "504") or "paused" in text or "json could not be generated" in text:
+        return "Supabase 專案目前無法使用（可能已被暫停或正在恢復中）：請登入 supabase.com 確認專案狀態，若顯示 paused 請按 Restore project，恢復後等 1～3 分鐘再試。"
+    return f"Supabase 回傳錯誤（{code}）：{e.message or e.details or '未知錯誤'}"
+
+
 def db_error_message(prefix: str, e: Exception) -> str:
-    return DB_UNREACHABLE_MESSAGE if isinstance(e, httpx.HTTPError) else f"{prefix}: {str(e)}"
+    return explain_db_error(e) or f"{prefix}: {str(e)}"
+
+
+def _error_response(request: Request, message: str, status_code: int):
+    if request.url.path.startswith("/api/admin"):
+        return HTMLResponse(
+            content=f"<h2 style='text-align:center; color:#c0392b; margin:50px auto; max-width:720px; line-height:1.6;'>{html_lib.escape(message)}</h2>",
+            status_code=status_code,
+        )
+    return JSONResponse(status_code=status_code, content={"status": "error", "message": message})
 
 
 @app.exception_handler(httpx.HTTPError)
 async def handle_db_unreachable(request: Request, exc: httpx.HTTPError):
     print(f"⚠️ 無法連線到 Supabase：{exc}")
-    if request.url.path.startswith("/api/admin"):
-        return HTMLResponse(
-            content=f"<h2 style='text-align:center; color:#c0392b; margin:50px auto; max-width:720px; line-height:1.6;'>{html_lib.escape(DB_UNREACHABLE_MESSAGE)}</h2>",
-            status_code=503,
-        )
-    return JSONResponse(status_code=503, content={"status": "error", "message": DB_UNREACHABLE_MESSAGE})
+    return _error_response(request, DB_UNREACHABLE_MESSAGE, 503)
+
+
+@app.exception_handler(APIError)
+async def handle_supabase_error(request: Request, exc: APIError):
+    message = explain_db_error(exc)
+    print(f"⚠️ Supabase 回傳錯誤：{exc!r}\n→ {message}")
+    return _error_response(request, message, 500)
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception):
+    # 其他沒預料到的錯誤：後端視窗印出完整錯誤方便除錯，畫面上顯示錯誤類型而不是只有 Internal Server Error
+    traceback.print_exc()
+    return _error_response(request, f"系統發生錯誤（{type(exc).__name__}：{exc}），請把後端視窗的錯誤訊息提供給開發人員。", 500)
 
 
 # ===== 小診所設定 =====
