@@ -252,6 +252,118 @@
       return res.json();
     }
 
+
+    // ===== 語音操作：選時段、確認掛號、查詢紀錄 =====
+    // 國字數字轉阿拉伯數字（支援到 999，例如：七十九、一百零五、三十一）
+    const CN_DIGITS = { "〇": 0, "零": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9 };
+    function cnToInt(s) {
+      if (!s) return NaN;
+      if (/^\d+$/.test(s)) return parseInt(s, 10);
+      let total = 0, current = 0;
+      for (const ch of s) {
+        if (ch in CN_DIGITS) current = CN_DIGITS[ch];
+        else if (ch === "十") { total += (current || 1) * 10; current = 0; }
+        else if (ch === "百") { total += (current || 1) * 100; current = 0; }
+        else return NaN;
+      }
+      return total + current;
+    }
+
+    // 把「民國七十九年一月一日」這種國字日期轉成「民國79年1月1日」，後面的解析才看得懂
+    function convertChineseDateNumbers(text) {
+      return (text || "").replace(/[〇零一二兩三四五六七八九十百]+(?=\s*(?:年|月|日|號))/g, (m) => {
+        const n = cnToInt(m);
+        return Number.isNaN(n) ? m : String(n);
+      });
+    }
+
+    const WEEKDAY_CHAR = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 0, "天": 0 }; // 對應 JS Date.getDay()
+
+    function spokenDate(iso) {
+      const [, m, d] = (iso || "").split("-");
+      return m && d ? `${parseInt(m, 10)}月${parseInt(d, 10)}日` : iso;
+    }
+
+    // 解析語音指令：「最快的」「下週二下午」「9月30號晚上」「換林醫師」「確定掛號」「取消」
+    function parseScheduleCommand(raw, now = new Date()) {
+      const t = convertChineseDateNumbers((raw || "").replace(/\s/g, "")).replace(/醫生/g, "醫師");
+      const cmd = { doctor: null, date: null, session: null, earliest: false, confirm: false, cancel: false };
+      for (const doc of Object.keys(CLINIC_DOCTORS)) {
+        if (t.includes(doc)) cmd.doctor = doc;
+      }
+      if (/早上|上午|早診/.test(t)) cmd.session = "早上";
+      else if (/下午|午診/.test(t)) cmd.session = "下午";
+      else if (/晚上|夜診|晚診/.test(t)) cmd.session = "晚上";
+      if (/最快|最近|盡快|越快越好|最早/.test(t)) cmd.earliest = true;
+
+      const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const addDays = (n) => { const d = new Date(base); d.setDate(d.getDate() + n); return d; };
+      let m;
+      if (/今天/.test(t)) cmd.date = todayKey(base);
+      else if (/明天/.test(t)) cmd.date = todayKey(addDays(1));
+      else if (/後天/.test(t)) cmd.date = todayKey(addDays(2));
+      else if ((m = t.match(/(下下|下|這|本)?(?:個)?(?:週|周|星期|禮拜)([一二三四五六日天])/))) {
+        const target = WEEKDAY_CHAR[m[2]];
+        const sinceMonday = (base.getDay() + 6) % 7;
+        const targetFromMonday = (target + 6) % 7;
+        if (m[1] === "下" || m[1] === "下下") {
+          cmd.date = todayKey(addDays(-sinceMonday + 7 * (m[1] === "下" ? 1 : 2) + targetFromMonday));
+        } else if (m[1]) {
+          cmd.date = todayKey(addDays(-sinceMonday + targetFromMonday));
+        } else {
+          cmd.date = todayKey(addDays((target - base.getDay() + 7) % 7)); // 只說「星期二」：接下來最近的星期二（含今天）
+        }
+      } else if ((m = t.match(/(\d{1,2})月(\d{1,2})(?:日|號)?/))) {
+        const mo = parseInt(m[1], 10), da = parseInt(m[2], 10);
+        if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) {
+          let d = new Date(base.getFullYear(), mo - 1, da);
+          if (d < base) d = new Date(base.getFullYear() + 1, mo - 1, da);
+          cmd.date = todayKey(d);
+        }
+      } else if ((m = t.match(/(\d{1,2})號/))) {
+        const da = parseInt(m[1], 10);
+        if (da >= 1 && da <= 31) {
+          let d = new Date(base.getFullYear(), base.getMonth(), da);
+          if (d < base) d = new Date(base.getFullYear(), base.getMonth() + 1, da);
+          cmd.date = todayKey(d);
+        }
+      }
+
+      const hasSlotWords = cmd.doctor || cmd.session || cmd.date || cmd.earliest;
+      if (!hasSlotWords) {
+        if (/不確定|不要|取消|算了|等一下|先不用|不用了/.test(t)) cmd.cancel = true;
+        else if (/確定|確認|沒問題|可以|好的|好啊|對|是的|就這樣|掛號吧|幫我掛|OK/i.test(t)) cmd.confirm = true;
+      }
+      return cmd;
+    }
+
+    // 依語音指令從班表挑一個還有名額的時段；沒指定醫師時，優先目前選的／負責這個問題的醫師，再找其他醫師
+    function pickSlotFromSchedule(schedule, cmd, preferDoctors = []) {
+      if (!schedule || !Array.isArray(schedule.days)) return null;
+      const candidates = [];
+      for (const day of schedule.days) {
+        if (cmd.date && day.date !== cmd.date) continue;
+        for (const slot of day.slots) {
+          if (slot.full) continue;
+          if (cmd.doctor && slot.doctor !== cmd.doctor) continue;
+          if (cmd.session && slot.session !== cmd.session) continue;
+          candidates.push({ date: day.date, weekday: day.weekday, ...slot });
+        }
+      }
+      if (!candidates.length) return null;
+      const rank = (c) => {
+        if (cmd.doctor) return 0;
+        const i = preferDoctors.indexOf(c.doctor);
+        return i >= 0 ? i : 99;
+      };
+      // 班表本來就依日期、時段排好，穩定排序後同優先度會保留「最早」的那一個
+      return candidates.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i)[0].c;
+    }
+
+    function describeScheduleCommand(cmd) {
+      return [cmd.date ? spokenDate(cmd.date) : "", cmd.session || "", cmd.doctor || ""].filter(Boolean).join(" ");
+    }
+
     // 骨科常見部位問診腳本
     const symptomDB = {
       頸椎: { questions: [
@@ -370,7 +482,7 @@
     }
 
     function parsePatientInfoFromSpeech(raw) {
-      const t = normalizeSpeechText(raw);
+      const t = normalizeSpeechText(convertChineseDateNumbers(raw));
       const out = { name: "", idNumber: "", birth: "", phone: "" };
       if (!t) return out;
 
@@ -381,12 +493,12 @@
       const phM = compact.match(/09\d{8}/);
       if (phM) out.phone = phM[0];
 
-      const roc = t.match(/民國\s*(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
+      const roc = t.match(/民國\s*(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日號]?/);
       if (roc) {
         const y = parseInt(roc[1], 10) + 1911;
         out.birth = `${y}/${String(roc[2]).padStart(2, "0")}/${String(roc[3]).padStart(2, "0")}`;
       } else {
-        const west = t.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/) || t.match(/(\d{4})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})/);
+        const west = t.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日號]?/) || t.match(/(\d{4})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})/);
         if (west) {
           out.birth = `${west[1]}/${String(west[2]).padStart(2, "0")}/${String(west[3]).padStart(2, "0")}`;
         }
@@ -480,6 +592,10 @@
       const recognitionRef = useRef(null);
       const textInputRef = useRef(null);
       const patientInfoRecognitionRef = useRef(null);
+      const voiceRecRef = useRef(null);
+      const voiceSessionRef = useRef(0); // 每次按下／停止語音操作都 +1，避免「唸完提示」後又在已取消的情況下開始聽
+      const [voiceTarget, setVoiceTarget] = useState(null); // 正在聆聽的語音操作："booking" 選時段／確認、"history" 查詢紀錄
+      const [voiceHeard, setVoiceHeard] = useState({ booking: "", history: "" });
       const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {}, chatHistory: [] });
 
       useEffect(() => {
@@ -581,9 +697,10 @@
       }, [showBookingEdit]);
 
       function pickScheduleSlot(doctor, date, timeSlotStr) {
-        // 問題類型若是這位醫師負責的就保留；否則（例如直接掛號沒有問診）記成醫師的主要類型
+        // 問題類型優先用 AI 分流的結果，其次是目前的類型；都不是這位醫師負責的（例如直接掛號沒有問診），才記成醫師的主要類型
         const depts = CLINIC_DOCTORS[doctor]?.departments || [];
-        const department = depts.includes(booking.department) ? booking.department : (depts[0] || booking.department);
+        const triageDept = !preferredDoctor && Array.isArray(result[0]) ? result[0][0] : null;
+        const department = [triageDept, booking.department].find((d) => d && depts.includes(d)) || depts[0] || booking.department;
         setBooking({ department, doctor, date, slot: timeSlotStr });
         setShowBookingEdit(false);
       }
@@ -598,6 +715,161 @@
           speechSynthesis.speak(utterance);
         } catch (e) {
           console.warn("語音播報失敗：", e);
+        }
+      }
+
+
+      // ---------- 語音操作（選時段／確認掛號／查詢紀錄）共用 ----------
+      // 先唸出提示，唸完再開始聽；瀏覽器沒有觸發 onend 時用計時器保底，避免卡住
+      function speakThen(message, onDone) {
+        let done = false;
+        const finish = () => { if (!done) { done = true; onDone(); } };
+        if (!window.speechSynthesis) { finish(); return; }
+        try {
+          const utterance = new SpeechSynthesisUtterance(message);
+          utterance.lang = "zh-TW";
+          utterance.onend = finish;
+          utterance.onerror = finish;
+          speechSynthesis.cancel();
+          speechSynthesis.speak(utterance);
+          setTimeout(finish, message.length * 280 + 1500);
+        } catch (e) {
+          finish();
+        }
+      }
+
+      function listenOnce(target, onText) {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) { alert("此瀏覽器不支援語音辨識，請改用點選或文字輸入（建議使用 Chrome）。"); return; }
+        voiceRecRef.current?.abort?.();
+        const rec = new SR();
+        rec.lang = "zh-TW";
+        rec.interimResults = false;
+        rec.maxAlternatives = 1;
+        let heard = false;
+        rec.onresult = (e) => {
+          heard = true;
+          const transcript = correctMedicalTerms(e.results[0][0].transcript);
+          setVoiceHeard((prev) => ({ ...prev, [target]: transcript }));
+          onText(transcript);
+        };
+        rec.onerror = () => { if (!heard) speak("沒有聽清楚，請再按一次麥克風，或改用點選。"); };
+        rec.onend = () => setVoiceTarget((cur) => (cur === target ? null : cur));
+        voiceRecRef.current = rec;
+        setVoiceTarget(target);
+        try { rec.start(); } catch (e) { setVoiceTarget(null); }
+      }
+
+      function stopListening() {
+        voiceSessionRef.current += 1;
+        voiceRecRef.current?.abort?.();
+        setVoiceTarget(null);
+      }
+
+      function promptThenListen(target, prompt, onText) {
+        const session = ++voiceSessionRef.current;
+        setVoiceTarget(target);
+        speakThen(prompt, () => {
+          if (voiceSessionRef.current === session) listenOnce(target, onText);
+        });
+      }
+
+      function bookingSummarySentence() {
+        return `${spokenDate(booking.date)}${booking.slot ? booking.slot.split(" ")[0] : ""}，${booking.doctor}的門診`;
+      }
+
+      function startBookingVoice() {
+        if (voiceTarget === "booking") { stopListening(); return; }
+        const prompt = booking.doctor
+          ? `目前幫您安排${bookingSummarySentence()}。要掛號請說「確定」；想換時間或醫師，請直接說，例如「下週二下午」或「換林醫師」。`
+          : "請說想要的時段或醫師，例如「最快的」、「下週二下午」或「林醫師」。";
+        promptThenListen("booking", prompt, handleBookingVoice);
+      }
+
+      async function handleBookingVoice(text) {
+        const cmd = parseScheduleCommand(text);
+        if (cmd.cancel) { speak("好的，先不掛號，您可以修改時段或資料後再確認。"); return; }
+        if (cmd.confirm) {
+          if (!booking.doctor) { speak("還沒有選好看診時段，請再按一次麥克風，說想要的時段，例如「最快的」。"); return; }
+          const { name, idNumber, birth, phone } = patientInfo;
+          const missing = [!name && "姓名", !idNumber && "身分證字號", !birth && "生日", !phone && "手機"].filter(Boolean);
+          if (missing.length) { speak(`還缺少${missing.join("、")}，請先用語音或打字填好，再確認掛號。`); return; }
+          speak(`好的，正在為您掛${bookingSummarySentence()}。`);
+          confirmBookingAll();
+          return;
+        }
+        if (!(cmd.doctor || cmd.session || cmd.date || cmd.earliest)) {
+          speak("抱歉沒有聽懂。您可以說「最快的」、「下週二下午」、「換林醫師」，或說「確定」完成掛號。");
+          return;
+        }
+        try {
+          const data = await fetchClinicSchedule(14);
+          if (data.status !== "success") { speak("查詢班表失敗，請稍後再試。"); return; }
+          const triageDept = !preferredDoctor && Array.isArray(result[0]) ? result[0][0] : booking.department;
+          const handlers = Object.entries(CLINIC_DOCTORS).filter(([, info]) => info.departments.includes(triageDept)).map(([doc]) => doc);
+          const prefer = [booking.doctor, ...handlers].filter(Boolean);
+          const slot = pickSlotFromSchedule(data, cmd, prefer);
+          if (!slot) {
+            speak(`${describeScheduleCommand(cmd) || "這個時間"}沒有可以掛的門診，請換一個時間，或說「最快的」。`);
+            return;
+          }
+          pickScheduleSlot(slot.doctor, slot.date, slot.time_slot);
+          speak(`已為您改成${spokenDate(slot.date)}星期${slot.weekday}${slot.session}，${slot.doctor}的門診。確認沒問題，請再按麥克風說「確定」，或按「確認掛號」。`);
+        } catch (e) {
+          speak("查詢班表失敗，請確認後端是否已啟動。");
+        }
+      }
+
+      function startHistoryVoice() {
+        if (voiceTarget === "history") { stopListening(); return; }
+        promptThenListen("history", "請說出身分證字號和生日，例如：A123456789，民國79年1月1日。", handleHistoryVoice);
+      }
+
+      function handleHistoryVoice(text) {
+        const parsed = parsePatientInfoFromSpeech(text);
+        const id = parsed.idNumber || searchId.trim();
+        const birth = parsed.birth || searchBirth.trim();
+        if (parsed.idNumber) setSearchId(parsed.idNumber);
+        if (parsed.birth) setSearchBirth(parsed.birth);
+        if (id && birth) { searchHistory(id, birth); return; }
+        speak(!id ? "沒有聽到身分證字號，請再按一次麥克風說一次。" : "沒有聽到生日，請再按一次麥克風，說例如：民國79年1月1日。");
+      }
+
+      async function searchHistory(idNumber, birth) {
+        if (!idNumber || !birth) {
+          alert("請輸入身分證字號與生日");
+          return;
+        }
+        setIsSearching(true);
+        try {
+          const response = await fetch(`${API_BASE}/api/booking/history`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id_number: idNumber, birth_date: birth })
+          });
+          const data = await response.json();
+          if (data.status === "success") {
+            setHistoryList(data.data);
+            setLastVisit(data.last_visit || null);
+            setRescheduleTarget(null);
+            if (data.data.length === 0) {
+              speak("查無掛號紀錄。");
+            } else if (data.last_visit) {
+              speak(`為您找到 ${data.data.length} 筆紀錄。上次看診是${spokenDate(data.last_visit.appointment_date)}，${data.last_visit.doctor}。`);
+            } else {
+              speak(`為您找到 ${data.data.length} 筆紀錄。`);
+            }
+          } else {
+            const msg = data.message || (Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join("；") : data.detail) || "請稍後再試。";
+            setHistoryList(null); setLastVisit(null);
+            speak(msg);
+            alert("查詢失敗：" + msg);
+          }
+        } catch (err) {
+          console.error("查詢 API 呼叫失敗", err);
+          alert("連線後端失敗，請確認伺服器已啟動。");
+        } finally {
+          setIsSearching(false);
         }
       }
 
@@ -928,6 +1200,7 @@
         setContactForm({ open: false, phone: "", loading: false });
         setXrayImage(null); setXrayPart(""); setXrayView({ brightness: 100, contrast: 100, invert: false, zoom: 1 });
         setRehabOpenId(null); setShowRagSources(false); setRagAgreement(null); setSearchBirth("");
+        voiceSessionRef.current += 1; voiceRecRef.current?.abort?.(); setVoiceTarget(null); setVoiceHeard({ booking: "", history: "" });
       }
 
       function startDirectBooking() {
@@ -1429,6 +1702,14 @@
               )
             ) : null}
 
+            <div className="voice-command">
+              <button type="button" className={`voice-cmd-btn ${voiceTarget === "booking" ? "recording" : ""}`} onClick={startBookingVoice}>
+                {voiceTarget === "booking" ? "🛑 停止聆聽" : "🎙 用說的選時段／確認掛號"}
+              </button>
+              <p className="voice-cmd-hint">可以說：「最快的」、「下週二下午」、「換林醫師」、「確定」</p>
+              {voiceHeard.booking ? <div className="input-echo"><span className="echo-label">聽到：</span><span className="echo-text">{voiceHeard.booking}</span></div> : null}
+            </div>
+
             <button type="button" className="ghost-btn" onClick={() => setShowBookingEdit((v) => !v)}>
               {showBookingEdit ? (booking.doctor ? "收合，使用已選時段" : "收合") : "✏️ 我要自己選日期或醫師"}
             </button>
@@ -1460,41 +1741,7 @@
       }
 
       function renderCheckHistory() {
-        const handleSearch = async () => {
-          if (!searchId.trim() || !searchBirth.trim()) {
-            alert("請輸入身分證字號與生日");
-            return;
-          }
-          setIsSearching(true);
-          try {
-            const response = await fetch(`${API_BASE}/api/booking/history`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id_number: searchId.trim(), birth_date: searchBirth.trim() })
-            });
-            const data = await response.json();
-            if (data.status === "success") {
-              setHistoryList(data.data);
-              setLastVisit(data.last_visit || null);
-              setRescheduleTarget(null);
-              if (data.data.length === 0) {
-                speak("查無掛號紀錄。");
-              } else {
-                speak(`為您找到 ${data.data.length} 筆紀錄。`);
-              }
-            } else {
-              const msg = data.message || (Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join("；") : data.detail) || "請稍後再試。";
-              setHistoryList(null); setLastVisit(null);
-              speak(msg);
-              alert("查詢失敗：" + msg);
-            }
-          } catch (err) {
-            console.error("查詢 API 呼叫失敗", err);
-            alert("連線後端失敗，請確認伺服器已啟動。");
-          } finally {
-            setIsSearching(false);
-          }
-        };
+        const handleSearch = () => searchHistory(searchId.trim(), searchBirth.trim());
 
         const handleCancel = async (item) => {
           if (!window.confirm(`確定要取消 ${item.slot} ${item.doctor} 的掛號嗎？`)) return;
@@ -1627,6 +1874,13 @@
           <div className="form-card">
             <h3>就診紀錄／修改預約</h3>
             <p className="helper-text" style={{ marginTop: 0 }}>為保護個資，需同時輸入掛號時填寫的身分證字號與生日。</p>
+            <div className="voice-command">
+              <button type="button" className={`voice-cmd-btn ${voiceTarget === "history" ? "recording" : ""}`} onClick={startHistoryVoice}>
+                {voiceTarget === "history" ? "🛑 停止聆聽" : "🎙 用說的輸入身分證與生日"}
+              </button>
+              <p className="voice-cmd-hint">例如：「A123456789，民國79年1月1日」，聽完會自動查詢</p>
+              {voiceHeard.history ? <div className="input-echo"><span className="echo-label">聽到：</span><span className="echo-text">{voiceHeard.history}</span></div> : null}
+            </div>
             <label className="field-label">身分證字號</label>
             <input
               className="text-input"
