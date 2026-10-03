@@ -14,6 +14,7 @@ create table if not exists patients (
     name text not null,
     birth_date date,
     phone text,
+    password_hash text,                   -- 病患帳號登入密碼（雜湊），沒有建立帳號為 null
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
@@ -46,6 +47,7 @@ comment on column appointments.appointment_no is '掛號序號（連續編號，
 create index if not exists idx_appointments_patient_id on appointments(patient_id);
 create index if not exists idx_appointments_date on appointments(appointment_date);
 create index if not exists idx_patients_id_number on patients(id_number);
+create index if not exists idx_patients_phone on patients(phone);
 
 -- ---------- AI 問診紀錄表 ----------
 -- 記錄使用者在問診流程中回答的內容與 AI 分流建議，供醫師看診前參考。

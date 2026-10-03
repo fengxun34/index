@@ -6,6 +6,8 @@ import os
 import re
 import secrets
 import hashlib
+import hmac
+import base64
 import html as html_lib
 import httpx
 import traceback
@@ -21,6 +23,8 @@ from typing import List, Optional, Dict, Any
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
+from fastapi import Header
+from set_admin_password import hash_password
 
 load_dotenv()
 
@@ -53,6 +57,8 @@ def explain_db_error(e: Exception) -> Optional[str]:
     if code in ("42P01", "PGRST205") or "does not exist" in text or "could not find the table" in text:
         return "Supabase 資料庫還沒建立資料表：請到 Supabase 專案的 SQL Editor，貼上並執行 sql/schema.sql。"
     if code in ("42703", "PGRST204") or "column" in text and ("not exist" in text or "could not find" in text):
+        if "password_hash" in text:
+            return "Supabase 還沒加上病患帳號欄位：請到 SQL Editor 執行 sql/004_patient_accounts.sql。"
         return "Supabase 資料表缺少欄位（可能是舊版資料表）：請到 SQL Editor 執行 sql/002_add_sequential_ids_and_triage.sql 與 sql/003_atomic_slot_capacity.sql。"
     if code in ("42883", "PGRST202") or "book_appointment_slot" in text:
         return "Supabase 缺少掛號用的資料庫函式：請到 SQL Editor 執行 sql/003_atomic_slot_capacity.sql。"
@@ -760,6 +766,72 @@ def confirm_booking(req: BookingRequest):
     except Exception as e:
         return {"status": "error", "message": db_error_message("存入資料庫失敗", e)}
 
+def build_patient_history(patient: dict) -> dict:
+    """組出病人的所有掛號紀錄、上次就診，以及最近一次 AI 問診（登入後帶入先前問答用）。"""
+    appt_res = (
+        supabase.table("appointments")
+        .select("id, appointment_no, department, doctor, appointment_date, time_slot, status, created_at")
+        .eq("patient_id", patient["id"])
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    # 一併帶出每次掛號當時的 AI 問診紀錄，讓病人回顧「上次看了什麼問題」
+    triage_res = (
+        supabase.table("triage_records")
+        .select("appointment_id, body_part, main_complaint, qa_answers, ai_suggestion, created_at")
+        .eq("patient_id", patient["id"])
+        .execute()
+    )
+    triage_rows = triage_res.data or []
+    triage_by_appointment = {t["appointment_id"]: t for t in triage_rows if t.get("appointment_id")}
+
+    today_str = datetime.now().date().isoformat()
+    history = []
+    for a in appt_res.data or []:
+        triage = triage_by_appointment.get(a["id"]) or {}
+        history.append({
+            "name": patient.get("name"),
+            "appointment_no": a.get("appointment_no"),
+            "department": a["department"],
+            "category_label": category_label(a["department"]),
+            "doctor": a["doctor"],
+            "appointment_date": a["appointment_date"],
+            "time_slot": a["time_slot"],
+            "slot": f"{a['appointment_date']} {a['time_slot']}",
+            "status": a.get("status", "confirmed"),
+            "is_past": a["appointment_date"] < today_str,
+            "created_at": a["created_at"],
+            "body_part": triage.get("body_part"),
+            "main_complaint": triage.get("main_complaint"),
+            "ai_suggestion": triage.get("ai_suggestion"),
+        })
+
+    # 上次就診：看診日期已經過去、且沒有取消的掛號裡，日期最近的一筆
+    past_visits = [h for h in history if h["is_past"] and h["status"] != "cancelled"]
+    def visit_order(h):
+        session = SESSION_BY_TIME_SLOT.get(h["time_slot"])
+        return (h["appointment_date"], SESSION_ORDER.index(session) if session in SESSION_ORDER else -1)
+    last_visit = max(past_visits, key=visit_order, default=None)
+
+    # 最近一次 AI 問診（不論是否已看診），登入後問診時可以「跟上次一樣」
+    last_triage = None
+    if triage_rows:
+        t = max(triage_rows, key=lambda r: r.get("created_at") or "")
+        appt = next((a for a in (appt_res.data or []) if a["id"] == t.get("appointment_id")), {})
+        last_triage = {
+            "body_part": t.get("body_part"),
+            "main_complaint": t.get("main_complaint"),
+            "qa_answers": t.get("qa_answers") or {},
+            "department": appt.get("department"),
+            "category_label": category_label(appt.get("department")),
+            "doctor": appt.get("doctor"),
+            "appointment_date": appt.get("appointment_date"),
+        }
+
+    return {"data": history, "last_visit": last_visit, "last_triage": last_triage}
+
+
 @app.post("/api/booking/history")
 def get_booking_history(req: HistoryRequest):
     if supabase is None:
@@ -770,58 +842,7 @@ def get_booking_history(req: HistoryRequest):
         if error:
             return {"status": "error", "message": error}
 
-        appt_res = (
-            supabase.table("appointments")
-            .select("id, appointment_no, department, doctor, appointment_date, time_slot, status, created_at")
-            .eq("patient_id", patient["id"])
-            .order("created_at", desc=True)
-            .execute()
-        )
-
-        # 一併帶出每次掛號當時的 AI 問診紀錄，讓病人回顧「上次看了什麼問題」
-        triage_res = (
-            supabase.table("triage_records")
-            .select("appointment_id, body_part, main_complaint, ai_suggestion")
-            .eq("patient_id", patient["id"])
-            .execute()
-        )
-        triage_by_appointment = {
-            t["appointment_id"]: t for t in (triage_res.data or []) if t.get("appointment_id")
-        }
-
-        today_str = datetime.now().date().isoformat()
-        history = []
-        for a in appt_res.data:
-            triage = triage_by_appointment.get(a["id"]) or {}
-            history.append({
-                "name": patient["name"],
-                "appointment_no": a.get("appointment_no"),
-                "department": a["department"],
-                "category_label": category_label(a["department"]),
-                "doctor": a["doctor"],
-                "appointment_date": a["appointment_date"],
-                "time_slot": a["time_slot"],
-                "slot": f"{a['appointment_date']} {a['time_slot']}",
-                "status": a.get("status", "confirmed"),
-                "is_past": a["appointment_date"] < today_str,
-                "created_at": a["created_at"],
-                "body_part": triage.get("body_part"),
-                "main_complaint": triage.get("main_complaint"),
-                "ai_suggestion": triage.get("ai_suggestion"),
-            })
-
-        # 上次就診：看診日期已經過去、且沒有取消的掛號裡，日期最近的一筆
-        past_visits = [h for h in history if h["is_past"] and h["status"] != "cancelled"]
-        def visit_order(h):
-            session = SESSION_BY_TIME_SLOT.get(h["time_slot"])
-            return (h["appointment_date"], SESSION_ORDER.index(session) if session in SESSION_ORDER else -1)
-        last_visit = max(past_visits, key=visit_order, default=None)
-
-        return {
-            "status": "success",
-            "data": history,
-            "last_visit": last_visit,
-        }
+        return {"status": "success", **build_patient_history(patient)}
     except Exception as e:
         return {"status": "error", "message": db_error_message("查詢失敗", e)}
 
@@ -921,6 +942,207 @@ def reschedule_booking(req: RescheduleRequest):
     except Exception as e:
         return {"status": "error", "message": db_error_message("改期失敗", e)}
 
+# ===== 病患帳號（手機號碼或身分證字號＋密碼）=====
+# 登入後：個人資料自動帶入、直接看到就診紀錄、問診時可帶入上次的回答。
+# 登入憑證是後端簽章的 token（不另外建 session 表）；簽章裡包含密碼雜湊，改密碼後舊 token 自動失效。
+SESSION_DAYS = 7
+SESSION_SECRET = (os.environ.get("SESSION_SECRET")
+                  or hashlib.sha256(f"patient-session|{SUPABASE_SERVICE_ROLE_KEY or 'dev'}".encode()).hexdigest())
+ACCOUNT_FAILED_MESSAGE = "帳號或密碼錯誤。"
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _sign(payload: str, password_hash: str) -> str:
+    return _b64(hmac.new(SESSION_SECRET.encode(), f"{payload}|{password_hash}".encode(), hashlib.sha256).digest())
+
+
+def issue_session_token(patient_id: str, password_hash: str) -> str:
+    expires = int((datetime.utcnow() + timedelta(days=SESSION_DAYS)).timestamp())
+    payload = f"{patient_id}.{expires}"
+    return f"{_b64(payload.encode())}.{_sign(payload, password_hash)}"
+
+
+def patient_from_token(authorization: Optional[str]):
+    """驗證登入 token，回傳病人資料；無效或過期回傳 None。"""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    try:
+        payload_b64, signature = authorization[7:].strip().split(".")
+        payload = _unb64(payload_b64).decode()
+        patient_id, expires = payload.rsplit(".", 1)
+        if int(expires) < datetime.utcnow().timestamp():
+            return None
+    except Exception:
+        return None
+    res = supabase.table("patients").select("id, name, id_number, birth_date, phone, password_hash").eq("id", patient_id).execute()
+    patient = res.data[0] if res.data else None
+    if not patient or not patient.get("password_hash"):
+        return None
+    if not secrets.compare_digest(signature, _sign(payload, patient["password_hash"])):
+        return None
+    return patient
+
+
+def account_profile(patient: dict) -> dict:
+    birth = patient.get("birth_date") or ""
+    return {
+        "name": patient.get("name"),
+        "id_number": patient.get("id_number"),
+        "birth_date": birth.replace("-", "/"),
+        "phone": patient.get("phone"),
+    }
+
+
+def _validate_password(password: str) -> Optional[str]:
+    if len(password or "") < 6:
+        return "密碼至少需要 6 個字元。"
+    return None
+
+
+def _phone_taken_by_other_account(phone: str, patient_id: Optional[str]) -> bool:
+    res = supabase.table("patients").select("id, password_hash").eq("phone", phone).execute()
+    return any(r.get("password_hash") and r["id"] != patient_id for r in (res.data or []))
+
+
+class RegisterRequest(BaseModel):
+    name: str
+    id_number: str
+    birth_date: str
+    phone: str
+    password: str
+
+    @field_validator("id_number")
+    @classmethod
+    def validate_id_number(cls, v):
+        v = v.strip().upper()
+        if not re.match(r"^[A-Z][12]\d{8}$", v):
+            raise ValueError("身分證字號格式不正確，需為 1 個英文字母加 9 位數字（例如 A123456789）")
+        return v
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v):
+        v = v.strip()
+        if not re.match(r"^09\d{8}$", v):
+            raise ValueError("手機格式不正確，需為 09 開頭的 10 位數字")
+        return v
+
+
+class LoginRequest(BaseModel):
+    account: str   # 手機號碼或身分證字號
+    password: str
+
+
+class ResetPasswordRequest(BaseModel):
+    id_number: str
+    birth_date: str
+    new_password: str
+
+
+@app.post("/api/account/register")
+def register_account(req: RegisterRequest):
+    """建立病患帳號。已經掛過號的病人需身分證＋生日相符；第一次來的病人會同時建立病人資料。"""
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+    error = _validate_password(req.password)
+    if error:
+        return {"status": "error", "message": error}
+    birth = normalize_birth_date(req.birth_date)
+    if birth is None:
+        return {"status": "error", "message": "生日格式不正確，請輸入 YYYY/MM/DD，例如 1990/01/01。"}
+    try:
+        existing = supabase.table("patients").select("id, birth_date, password_hash").eq("id_number", req.id_number).execute()
+        if existing.data:
+            patient = existing.data[0]
+            if patient.get("password_hash"):
+                return {"status": "error", "message": "這個身分證字號已經建立過帳號，請直接登入；忘記密碼可以用「忘記密碼」重設。"}
+            if patient.get("birth_date") and patient["birth_date"] != birth:
+                return {"status": "error", "message": "此身分證字號已有掛號資料，但生日與先前填寫的不符，請確認後再試，或洽診所櫃台。"}
+            patient_id = patient["id"]
+        else:
+            patient_id = None
+        if _phone_taken_by_other_account(req.phone, patient_id):
+            return {"status": "error", "message": "這支手機已經綁定其他帳號；家人共用手機時，請改用身分證字號登入或註冊時填寫自己的手機。"}
+
+        password_hash = hash_password(req.password)
+        payload = {"name": req.name.strip(), "birth_date": birth, "phone": req.phone, "password_hash": password_hash}
+        if patient_id:
+            supabase.table("patients").update(payload).eq("id", patient_id).execute()
+        else:
+            created = supabase.table("patients").insert({"id_number": req.id_number, **payload}).execute()
+            patient_id = created.data[0]["id"]
+
+        patient = {"id": patient_id, "id_number": req.id_number, **payload}
+        return {"status": "success", "message": "帳號建立完成！", "token": issue_session_token(patient_id, password_hash),
+                "profile": account_profile(patient)}
+    except Exception as e:
+        return {"status": "error", "message": db_error_message("建立帳號失敗", e)}
+
+
+@app.post("/api/account/login")
+def login_account(req: LoginRequest):
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+    account = (req.account or "").strip().upper()
+    lock_key = f"patient:{account}"
+    if _is_locked_out(lock_key):
+        return {"status": "error", "message": f"登入失敗次數過多，請 {LOGIN_LOCKOUT_MINUTES} 分鐘後再試。"}
+    try:
+        field = "id_number" if re.match(r"^[A-Z][12]\d{8}$", account) else "phone"
+        res = supabase.table("patients").select("id, name, id_number, birth_date, phone, password_hash").eq(field, account).execute()
+        candidates = [p for p in (res.data or []) if p.get("password_hash")]
+        patient = next((p for p in candidates if verify_password(req.password, p["password_hash"])), None)
+        if not patient:
+            _record_failed_login(lock_key)
+            return {"status": "error", "message": ACCOUNT_FAILED_MESSAGE}
+        _failed_login_attempts.pop(lock_key, None)
+        return {"status": "success", "token": issue_session_token(patient["id"], patient["password_hash"]),
+                "profile": account_profile(patient)}
+    except Exception as e:
+        return {"status": "error", "message": db_error_message("登入失敗", e)}
+
+
+@app.get("/api/account/me")
+def get_my_account(authorization: Optional[str] = Header(default=None)):
+    """登入後取得個人資料、就診紀錄與最近一次問診（前端帶入用）。"""
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+    patient = patient_from_token(authorization)
+    if not patient:
+        return JSONResponse(status_code=401, content={"status": "error", "message": "登入已過期，請重新登入。"})
+    return {"status": "success", "profile": account_profile(patient), **build_patient_history(patient)}
+
+
+@app.post("/api/account/reset-password")
+def reset_password(req: ResetPasswordRequest):
+    """忘記密碼：身分證字號＋生日相符即可設定新密碼（舊的登入 token 會一起失效）。"""
+    if supabase is None:
+        return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
+    error = _validate_password(req.new_password)
+    if error:
+        return {"status": "error", "message": error}
+    try:
+        patient, error = verify_patient_identity(req.id_number, req.birth_date, "id, name, id_number, birth_date, phone, password_hash")
+        if error:
+            return {"status": "error", "message": error}
+        if not patient.get("password_hash"):
+            return {"status": "error", "message": "這個身分證字號還沒有建立帳號，請先註冊。"}
+        password_hash = hash_password(req.new_password)
+        supabase.table("patients").update({"password_hash": password_hash}).eq("id", patient["id"]).execute()
+        patient["password_hash"] = password_hash
+        return {"status": "success", "message": "密碼已重設，已為您登入。", "token": issue_session_token(patient["id"], password_hash),
+                "profile": account_profile(patient)}
+    except Exception as e:
+        return {"status": "error", "message": db_error_message("重設密碼失敗", e)}
+
+
 @app.post("/api/patient/update")
 def update_patient_contact(req: PatientUpdateRequest):
     """修改預約聯絡資訊（手機）。"""
@@ -931,6 +1153,8 @@ def update_patient_contact(req: PatientUpdateRequest):
         patient, error = verify_patient_identity(req.id_number, req.birth_date)
         if error:
             return {"status": "error", "message": error}
+        if _phone_taken_by_other_account(req.phone, patient["id"]):
+            return {"status": "error", "message": "這支手機已經綁定其他帳號，請改用其他手機號碼。"}
 
         supabase.table("patients").update({"phone": req.phone}).eq("id", patient["id"]).execute()
         return {"status": "success", "message": f"已將聯絡手機更新為 {req.phone}。"}

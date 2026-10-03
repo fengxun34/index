@@ -12,6 +12,7 @@
 5b. 上次就診紀錄欄位存在、改期可改掛診所其他醫師（不存在的醫師會被擋）、修改聯絡手機需要生日相符
 5c. 查詢需要身分證＋生日；不能用別人的身分證字號＋假生日掛號來改掉對方的生日
 5d. RAG 帶入分流結果時，會回報知識庫是否支持分流結果
+5e. 病患帳號：註冊（生日需相符）、手機／身分證登入、登入後取得紀錄、忘記密碼後舊登入失效
 6. 密碼雜湊機制正確（雜湊/比對本身，不需要知道真實管理員密碼）
 7. 後台登入失敗次數限制會生效（連續錯誤達上限後鎖定）
 8. 後台頁面沒有登入會被拒絕（401）
@@ -197,6 +198,28 @@ def main():
         # 5d. RAG 對照分流結果
         res = client.post("/rag/answer", json={"question": "部位：腰椎。腰痛。延伸到腿，腳麻", "top_k": 3, "metadata": {"recommended_department": "脊椎外科"}})
         check("RAG 會回報知識庫是否支持分流結果", res.status_code == 200 and res.json().get("agreement") in ("agree", "partial", "differ"))
+
+        # 5e. 病患帳號
+        acct_phone = "0900999001"
+        res = client.post("/api/account/register", json={"name": TEST_NAME, "id_number": TEST_ID_NUMBER, "birth_date": "1991/02/03", "phone": acct_phone, "password": "smoke123"})
+        check("帳號：生日不符不能註冊", res.status_code == 200 and res.json().get("status") == "error")
+        res = client.post("/api/account/register", json={"name": TEST_NAME, "id_number": TEST_ID_NUMBER, "birth_date": TEST_BIRTH, "phone": acct_phone, "password": "smoke123"})
+        token = res.json().get("token")
+        check("帳號：既有病人註冊成功", res.status_code == 200 and res.json().get("status") == "success" and token)
+        app_module._failed_login_attempts.pop(f"patient:{acct_phone}", None)
+        res = client.post("/api/account/login", json={"account": acct_phone, "password": "wrong-pass"})
+        check("帳號：密碼錯誤不能登入", res.json().get("status") == "error")
+        res = client.post("/api/account/login", json={"account": acct_phone, "password": "smoke123"})
+        check("帳號：用手機登入", res.json().get("status") == "success")
+        res = client.post("/api/account/login", json={"account": TEST_ID_NUMBER, "password": "smoke123"})
+        check("帳號：用身分證登入", res.json().get("status") == "success")
+        res = client.get("/api/account/me", headers={"Authorization": f"Bearer {token}"})
+        check("帳號：登入後取得個人資料與就診紀錄", res.status_code == 200 and res.json().get("profile", {}).get("id_number") == TEST_ID_NUMBER and len(res.json().get("data", [])) >= 1)
+        res = client.post("/api/account/reset-password", json={"id_number": TEST_ID_NUMBER, "birth_date": TEST_BIRTH, "new_password": "smoke456"})
+        check("帳號：忘記密碼可重設", res.json().get("status") == "success")
+        res = client.get("/api/account/me", headers={"Authorization": f"Bearer {token}"})
+        check("帳號：重設密碼後舊的登入失效", res.status_code == 401)
+        app_module._failed_login_attempts.pop(f"patient:{acct_phone}", None)
 
         # 6. 密碼雜湊機制本身正確（不需要知道真實管理員密碼，直接測雜湊/比對函式）
         test_password = "測試密碼_請忽略_Xk9!2p"
