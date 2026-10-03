@@ -144,6 +144,12 @@ def main():
             schema_ok = False
             bad(f"{col_check[0]} 缺少欄位（{col_check[1]}）", "到 SQL Editor 執行 sql/002_add_sequential_ids_and_triage.sql")
     try:
+        sb.table("patients").select("password_hash").limit(1).execute()
+        ok("病患帳號欄位 password_hash")
+    except Exception:
+        schema_ok = False
+        bad("patients 缺少病患帳號欄位（password_hash）", "到 SQL Editor 執行 sql/004_patient_accounts.sql")
+    try:
         # p_max_per_slot=0 會在寫入前就回報 SLOT_FULL，不會真的新增資料，只用來確認函式存在
         sb.rpc("book_appointment_slot", {
             "p_patient_id": "00000000-0000-0000-0000-000000000000", "p_department": "脊椎外科", "p_doctor": "檢查用",

@@ -29,7 +29,8 @@
       XRAY: "XRAY",
       REMINDERS: "REMINDERS",
       REHAB: "REHAB",
-      REFERRAL: "REFERRAL"
+      REFERRAL: "REFERRAL",
+      ACCOUNT: "ACCOUNT"
     };
 
     // 非骨科症狀關鍵字：偵測到這些且沒有合併骨骼關節相關描述時，
@@ -188,6 +189,8 @@
     }
 
     // ===== 復健／用藥提醒：存在這台裝置的瀏覽器裡（localStorage），不會上傳到伺服器 =====
+    const SESSION_STORAGE_KEY = "ortho_session_token_v1"; // 病患帳號的登入憑證（只存在這台裝置）
+    const EMPTY_ACCOUNT_FORM = { account: "", password: "", password2: "", name: "", idNumber: "", birth: "", phone: "" };
     const REMINDER_STORAGE_KEY = "ortho_reminders_v1";
     const REMINDER_DONE_KEY = "ortho_reminders_done_v1";
     const WEEKDAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"]; // 對應 JS 的 Date.getDay()
@@ -596,11 +599,39 @@
       const voiceSessionRef = useRef(0); // 每次按下／停止語音操作都 +1，避免「唸完提示」後又在已取消的情況下開始聽
       const [voiceTarget, setVoiceTarget] = useState(null); // 正在聆聽的語音操作："booking" 選時段／確認、"history" 查詢紀錄
       const [voiceHeard, setVoiceHeard] = useState({ booking: "", history: "" });
+      // 病患帳號：{ token, profile, lastTriage, lastVisit }；沒登入為 null
+      const [account, setAccount] = useState(null);
+      const [accountTab, setAccountTab] = useState("login");
+      const [accountForm, setAccountForm] = useState(EMPTY_ACCOUNT_FORM);
+      const [accountLoading, setAccountLoading] = useState(false);
       const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {}, chatHistory: [] });
 
       useEffect(() => {
         latestRef.current = { state, bodyPart, qaStep, answers, chatHistory };
       }, [state, bodyPart, qaStep, answers, chatHistory]);
+
+      // 開啟網頁時，若這台裝置之前登入過，就自動恢復登入並帶入資料
+      useEffect(() => {
+        const token = loadJson(SESSION_STORAGE_KEY, null);
+        if (token) refreshAccount(token);
+      }, []);
+
+      // 登入後帶入個人資料（只補空白欄位，不蓋掉使用者正在修改的內容）
+      useEffect(() => {
+        if (!account?.profile) return;
+        const fromProfile = profileToPatientInfo(account.profile);
+        setPatientInfo((prev) => ({
+          name: prev.name || fromProfile.name, idNumber: prev.idNumber || fromProfile.idNumber,
+          birth: prev.birth || fromProfile.birth, phone: prev.phone || fromProfile.phone
+        }));
+      }, [account?.profile]);
+
+      // 已登入的人進「就診紀錄」時，直接帶入身分並查詢，不用再輸入
+      useEffect(() => {
+        if (state !== STATES.CHECK_HISTORY || !account?.profile || historyList !== null) return;
+        setSearchId(account.profile.id_number); setSearchBirth(account.profile.birth_date);
+        searchHistory(account.profile.id_number, account.profile.birth_date);
+      }, [state, account?.profile]);
 
       useEffect(() => { saveJson(REMINDER_STORAGE_KEY, reminders); }, [reminders]);
       useEffect(() => { saveJson(REMINDER_DONE_KEY, reminderDone); }, [reminderDone]);
@@ -870,6 +901,88 @@
           alert("連線後端失敗，請確認伺服器已啟動。");
         } finally {
           setIsSearching(false);
+        }
+      }
+
+      // ---------- 病患帳號 ----------
+      function profileToPatientInfo(profile) {
+        return profile
+          ? { name: profile.name || "", idNumber: profile.id_number || "", birth: profile.birth_date || "", phone: profile.phone || "" }
+          : { name: "", idNumber: "", birth: "", phone: "" };
+      }
+
+      async function refreshAccount(token = account?.token) {
+        if (!token) return;
+        try {
+          const res = await fetch(`${API_BASE}/api/account/me`, { headers: { Authorization: `Bearer ${token}` } });
+          const data = await res.json();
+          if (res.ok && data.status === "success") {
+            setAccount({ token, profile: data.profile, lastTriage: data.last_triage || null, lastVisit: data.last_visit || null });
+          } else if (res.status === 401) {
+            logout(false);
+          }
+        } catch (e) {
+          console.warn("讀取帳號資料失敗", e);
+        }
+      }
+
+      function applyLogin(data, message) {
+        saveJson(SESSION_STORAGE_KEY, data.token);
+        setAccount({ token: data.token, profile: data.profile, lastTriage: null, lastVisit: null });
+        setPatientInfo(profileToPatientInfo(data.profile));
+        refreshAccount(data.token);
+        setAccountForm(EMPTY_ACCOUNT_FORM);
+        speak(message);
+        setToast(message);
+        setState(STATES.INIT);
+        setPrompt(`歡迎，${data.profile.name}！${INITIAL_PROMPT}`);
+      }
+
+      function logout(withMessage = true) {
+        try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch (e) { /* 無痕模式等情況略過 */ }
+        setAccount(null);
+        setPatientInfo(profileToPatientInfo(null));
+        setSearchId(""); setSearchBirth(""); setHistoryList(null); setLastVisit(null);
+        if (withMessage) { setToast("已登出"); speak("已登出"); }
+      }
+
+      function openAccount(tab = "login", prefill = {}) {
+        setAccountTab(tab);
+        setAccountForm({ ...EMPTY_ACCOUNT_FORM, ...prefill });
+        goToFeature(STATES.ACCOUNT, tab === "register" ? "建立帳號，下次掛號免填資料" : "請登入您的帳號");
+      }
+
+      async function submitAccount() {
+        const f = accountForm;
+        let url, body;
+        if (accountTab === "login") {
+          if (!f.account.trim() || !f.password) { alert("請輸入手機號碼（或身分證字號）與密碼。"); return; }
+          url = "/api/account/login"; body = { account: f.account.trim(), password: f.password };
+        } else if (accountTab === "register") {
+          if (!f.name.trim() || !f.idNumber.trim() || !f.birth.trim() || !f.phone.trim() || !f.password) { alert("請把所有欄位填寫完整。"); return; }
+          if (f.password !== f.password2) { alert("兩次輸入的密碼不一樣。"); return; }
+          url = "/api/account/register";
+          body = { name: f.name.trim(), id_number: f.idNumber.trim(), birth_date: f.birth.trim(), phone: f.phone.trim(), password: f.password };
+        } else {
+          if (!f.idNumber.trim() || !f.birth.trim() || !f.password) { alert("請輸入身分證字號、生日與新密碼。"); return; }
+          if (f.password !== f.password2) { alert("兩次輸入的密碼不一樣。"); return; }
+          url = "/api/account/reset-password"; body = { id_number: f.idNumber.trim(), birth_date: f.birth.trim(), new_password: f.password };
+        }
+        setAccountLoading(true);
+        try {
+          const res = await fetch(`${API_BASE}${url}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          const data = await res.json();
+          if (res.ok && data.status === "success") {
+            applyLogin(data, accountTab === "register" ? `帳號建立完成，歡迎${data.profile.name}！` : `歡迎回來，${data.profile.name}！`);
+          } else {
+            const msg = data.message || (Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join("；") : data.detail) || "請稍後再試。";
+            speak(msg);
+            alert(msg);
+          }
+        } catch (e) {
+          alert("連線後端失敗，請確認伺服器已啟動。");
+        } finally {
+          setAccountLoading(false);
         }
       }
 
@@ -1187,7 +1300,7 @@
         setBodyPart(""); setQaStep(0); setAnswers({}); setResult([]); setAlertMessage("");
         setNonOrthoDept(""); setNonOrthoText("");
         setIsDirectBooking(false);
-        setPatientInfo({ name: "", idNumber: "", birth: "", phone: "" });
+        setPatientInfo(profileToPatientInfo(account?.profile));
         setBooking({ department: "", doctor: "", date: "", slot: "" });
         setPreferredDoctor(null); setAiAssignLoading(false); setAiAssignError("");
         setShowBookingEdit(false); setEditDept(""); setDeptSchedule(null);
@@ -1439,6 +1552,22 @@
         );
       }
 
+      // 已登入、這次部位跟上次問診相同時，每一題都可以一鍵「跟上次一樣」
+      function renderPreviousAnswer() {
+        if (state !== STATES.QA || !account?.lastTriage) return null;
+        const last = account.lastTriage;
+        if (last.body_part !== bodyPart) return null;
+        const currentQ = (symptomDB[bodyPart]?.questions || [])[qaStep];
+        const prev = currentQ ? (last.qa_answers || {})[currentQ.key] : null;
+        if (!prev) return null;
+        return (
+          <div className="previous-answer">
+            <span>上次回答：「{prev}」</span>
+            <button type="button" className="mini-btn" onClick={() => submitQuickOption(prev)}>↺ 跟上次一樣</button>
+          </div>
+        );
+      }
+
       function renderQuickOptions() {
         if (state !== STATES.QA) return null;
         const questions = symptomDB[bodyPart]?.questions || [];
@@ -1476,7 +1605,8 @@
           });
           const data = await response.json();
           if (response.ok && data.status === "success") {
-            speak(`掛號成功，AI 已為您預約 ${booking.date} ${booking.slot} 的 ${booking.department}。`);
+            speak(`掛號成功，已為您預約${spokenDate(booking.date)}${booking.slot.split(" ")[0]}，${booking.doctor}的門診。`);
+            if (account?.token) refreshAccount();
             setState(STATES.COMPLETE);
           } else {
             const errorMessage = data.message
@@ -1873,7 +2003,11 @@
         return (
           <div className="form-card">
             <h3>就診紀錄／修改預約</h3>
-            <p className="helper-text" style={{ marginTop: 0 }}>為保護個資，需同時輸入掛號時填寫的身分證字號與生日。</p>
+            {account?.profile ? (
+              <p className="account-note">✅ 已登入 {account.profile.name}，為您顯示就診紀錄。</p>
+            ) : null}
+            <div style={{ display: account?.profile ? "none" : "block" }}>
+            <p className="helper-text" style={{ marginTop: 0 }}>為保護個資，需同時輸入掛號時填寫的身分證字號與生日。<button type="button" className="account-link inline" onClick={() => openAccount("login")}>登入帳號</button>可免輸入。</p>
             <div className="voice-command">
               <button type="button" className={`voice-cmd-btn ${voiceTarget === "history" ? "recording" : ""}`} onClick={startHistoryVoice}>
                 {voiceTarget === "history" ? "🛑 停止聆聽" : "🎙 用說的輸入身分證與生日"}
@@ -1900,6 +2034,7 @@
               <button type="button" className="mini-btn" onClick={handleSearch} disabled={isSearching}>
                 {isSearching ? "查詢中..." : "查詢"}
               </button>
+            </div>
             </div>
 
             {historyList !== null && historyList.length > 0 && !lastVisit ? (
@@ -2231,10 +2366,84 @@
         );
       }
 
+      function renderAccount() {
+        const f = accountForm;
+        const set = (k) => (e) => setAccountForm((prev) => ({ ...prev, [k]: k === "idNumber" ? e.target.value.toUpperCase() : e.target.value }));
+        const tabs = [["login", "登入"], ["register", "建立帳號"], ["reset", "忘記密碼"]];
+        return (
+          <div className="form-card">
+            <div className="care-tabs" role="tablist">
+              {tabs.map(([key, label]) => (
+                <button type="button" key={key} role="tab" aria-selected={accountTab === key} className={`care-tab ${accountTab === key ? "active" : ""}`} onClick={() => setAccountTab(key)}>{label}</button>
+              ))}
+            </div>
+            {accountTab === "login" ? (
+              <>
+                <p className="helper-text" style={{ marginTop: 0 }}>登入後會自動帶入您的資料、就診紀錄與上次的問診回答。</p>
+                <label className="field-label">手機號碼或身分證字號</label>
+                <input className="text-input" value={f.account} onChange={set("account")} placeholder="例如：0912345678" autoComplete="username" />
+                <label className="field-label">密碼</label>
+                <input className="text-input" type="password" value={f.password} onChange={set("password")} autoComplete="current-password" onKeyDown={(e) => { if (e.key === "Enter") submitAccount(); }} />
+              </>
+            ) : null}
+            {accountTab === "register" ? (
+              <>
+                <p className="helper-text" style={{ marginTop: 0 }}>以前掛過號的話，請填當時的身分證字號與生日，會自動接上您的就診紀錄。</p>
+                <label className="field-label">姓名</label>
+                <input className="text-input" value={f.name} onChange={set("name")} autoComplete="name" />
+                <label className="field-label">身分證字號</label>
+                <input className="text-input" value={f.idNumber} onChange={set("idNumber")} placeholder="例如：A123456789" />
+                <label className="field-label">生日</label>
+                <input className="text-input" value={f.birth} onChange={set("birth")} placeholder="YYYY/MM/DD" />
+                <label className="field-label">手機（之後可用手機登入）</label>
+                <input className="text-input" value={f.phone} onChange={set("phone")} placeholder="09xxxxxxxx" inputMode="numeric" autoComplete="tel" />
+                <label className="field-label">設定密碼（至少 6 個字元）</label>
+                <input className="text-input" type="password" value={f.password} onChange={set("password")} autoComplete="new-password" />
+                <label className="field-label">再輸入一次密碼</label>
+                <input className="text-input" type="password" value={f.password2} onChange={set("password2")} autoComplete="new-password" />
+              </>
+            ) : null}
+            {accountTab === "reset" ? (
+              <>
+                <p className="helper-text" style={{ marginTop: 0 }}>輸入註冊時的身分證字號與生日，即可設定新密碼。</p>
+                <label className="field-label">身分證字號</label>
+                <input className="text-input" value={f.idNumber} onChange={set("idNumber")} placeholder="例如：A123456789" />
+                <label className="field-label">生日</label>
+                <input className="text-input" value={f.birth} onChange={set("birth")} placeholder="YYYY/MM/DD" />
+                <label className="field-label">新密碼（至少 6 個字元）</label>
+                <input className="text-input" type="password" value={f.password} onChange={set("password")} autoComplete="new-password" />
+                <label className="field-label">再輸入一次新密碼</label>
+                <input className="text-input" type="password" value={f.password2} onChange={set("password2")} autoComplete="new-password" />
+              </>
+            ) : null}
+            <button type="button" className="btn" onClick={submitAccount} disabled={accountLoading}>
+              {accountLoading ? "處理中..." : accountTab === "login" ? "登入" : accountTab === "register" ? "建立帳號" : "重設密碼並登入"}
+            </button>
+            <p className="helper-text">不登入也可以直接掛號，只是每次都要重新填寫資料。</p>
+            <button type="button" className="secondary-btn" onClick={resetAll}>返回主畫面</button>
+          </div>
+        );
+      }
+
       function renderContent() {
         if (state === STATES.INIT) {
           return (
             <div className="hero-card intent-picker">
+              {account?.lastTriage ? (
+                <div className="last-triage-card">
+                  <div className="last-visit-badge">🗂 {account.profile.name}，上次的問診</div>
+                  <p>
+                    {account.lastTriage.body_part ? `${account.lastTriage.body_part}／` : ""}{account.lastTriage.main_complaint || "（未記錄主訴）"}
+                    {account.lastTriage.doctor ? `　·　${account.lastTriage.doctor}` : ""}
+                    {account.lastTriage.appointment_date ? `　·　${spokenDate(account.lastTriage.appointment_date)}` : ""}
+                  </p>
+                  <div className="last-visit-actions">
+                    <button type="button" className="mini-btn" onClick={() => analyzeSymptom(account.lastTriage.main_complaint || `${account.lastTriage.body_part}不舒服`)}>
+                      🔁 同樣的問題，帶入上次回答
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <h3 className="section-title">請問需要什麼服務？</h3>
               <p className="helper-text">選一項開始，或直接用語音／文字描述症狀也可以。</p>
               <div className="intent-options">
@@ -2314,6 +2523,7 @@
                 {renderQaProgress()}
                 <h3>{prompt}</h3>
                 {lastInputEcho ? (<div className="input-echo"><span className="echo-label">最近輸入：</span><span className="echo-text">{lastInputEcho}</span></div>) : null}
+                {renderPreviousAnswer()}
                 {renderQuickOptions()}
                 <div className="input-row">
                   <input className="text-input" ref={textInputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="請輸入你的回答" onKeyDown={(e) => { if (e.key === "Enter") submitManualInput(); }} />
@@ -2433,7 +2643,12 @@
         if (state === STATES.PATIENT_INFO) {
           return (
             <div className="form-card">
-              <h3>填寫基本資料，AI 幫您完成剩下的事</h3>
+              <h3>{account?.profile ? "確認基本資料，AI 幫您完成剩下的事" : "填寫基本資料，AI 幫您完成剩下的事"}</h3>
+              {account?.profile ? (
+                <p className="account-note">✅ 已帶入 {account.profile.name} 的帳號資料，有變更可以直接修改。</p>
+              ) : (
+                <p className="account-note">已經有帳號？<button type="button" className="account-link inline" onClick={() => openAccount("login")}>登入</button>就不用填寫。</p>
+              )}
               <div className="patient-info-mic">
                 <p className="patient-voice-hint">可直接用語音一次說出姓名、身分證字號、生日與手機號碼，AI 會自動幫您填入欄位。</p>
                 <button type="button" className={`mic-btn ${recordingPatientInfo ? "recording" : ""}`} onClick={recordingPatientInfo ? stopPatientInfoRecord : startPatientInfoRecord}>{recordingPatientInfo ? "停止語音輸入" : "語音填寫資料"}</button>
@@ -2479,6 +2694,14 @@
           return (
             <>
               <div className="success">🎉 掛號手續已完成！</div>
+              {!account?.profile ? (
+                <div className="register-suggest">
+                  <p>建立帳號後，下次掛號<strong>免填資料</strong>，還能直接看就診紀錄、帶入這次的問診回答。</p>
+                  <button type="button" className="mini-btn" onClick={() => openAccount("register", { name: patientInfo.name, idNumber: patientInfo.idNumber, birth: patientInfo.birth, phone: patientInfo.phone })}>
+                    ➕ 用這次的資料建立帳號
+                  </button>
+                </div>
+              ) : null}
               <div className="result-card summary-card" style={{ border: '2px dashed #4caf50', backgroundColor: '#f9fff9', padding: '20px' }}>
                 <h4 style={{ color: '#2e7d32', textAlign: 'center', marginBottom: '15px' }}>預約成功證明</h4>
                 <p><strong>姓名：</strong> {patientInfo.name}</p>
@@ -2503,12 +2726,23 @@
         if (state === STATES.XRAY && ENABLE_XRAY) return renderXray();
         if (state === STATES.REMINDERS) return renderReminders();
         if (state === STATES.REHAB) return renderRehab();
+        if (state === STATES.ACCOUNT) return renderAccount();
 
         return renderDefaultInput();
       }
 
       return (
         <div className="app">
+          <div className="account-bar">
+            {account?.profile ? (
+              <>
+                <span className="account-name">👤 {account.profile.name}</span>
+                <button type="button" className="account-link" onClick={() => { resetAll(); logout(); }}>登出</button>
+              </>
+            ) : (
+              <button type="button" className="account-link" onClick={() => openAccount("login")}>🔑 登入／建立帳號</button>
+            )}
+          </div>
           <div className="header">
             <div className="assistant">🦴</div>
             <div className="header-copy">

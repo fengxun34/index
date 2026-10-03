@@ -21,6 +21,8 @@
 - 骨科門診掛號、掛號紀錄查詢、後台掛號總覽（病人資料與掛號紀錄存於 Supabase）
 - 掛號欄位驗證（身分證字號、手機格式、科別）與同時段容額上限（避免同一時段被無限重複預約）
 - 病歷號／掛號序號採連續編號，方便人工對照；AI 問診過程（部位、問答、AI 建議）會隨掛號存檔，後台可查看
+- 病患帳號：用「手機號碼或身分證字號＋密碼」登入，個人資料自動帶入、就診紀錄直接顯示，
+  問診時若部位與上次相同，每題都可一鍵「跟上次一樣」；忘記密碼可用身分證＋生日重設；不登入也能照常掛號
 - 上次就診紀錄：查詢掛號時顯示最近一次已看診的科別、醫師、主訴與 AI 建議，可一鍵回診掛同一位醫師
 - 修改預約資訊：改期時可改掛同科別的其他醫師；可修改聯絡手機
 - X 光辨識器（示範版，**目前停用**，首頁不顯示；要開放時把 `index.html` 的 `ENABLE_XRAY` 改成 `true`）：上傳／拍攝 X 光片，檢查是否為灰階 X 光影像、提供亮度／對比／放大／反相檢視，
@@ -41,6 +43,8 @@ pip install -r requirements_true_rag.txt
 2. 開啟專案的 **SQL Editor**，貼上並執行 `sql/schema.sql`，建立 `patients`（病人資料）、
    `appointments`（掛號紀錄）、`admin_users`（後台管理員登入）與 `triage_records`（AI 問診紀錄）四張資料表。
 
+   > 📌 **已經建好資料庫、要加上病患帳號功能**：只要再執行 `sql/004_patient_accounts.sql`（新增密碼欄位，不會動到既有資料）。
+   >
    > 📌 如果你**已經**執行過舊版的 `sql/schema.sql`（`patients`／`appointments` 已經存在），
    > 改執行 `sql/002_add_sequential_ids_and_triage.sql` 來補上病歷號、掛號序號欄位與
    > `triage_records` 表，不會動到既有資料。
@@ -157,6 +161,16 @@ python smoke_test.py
 { "id_number": "A123456789", "birth_date": "1990/01/01", "appointment_no": 12, "new_slot": "2026-08-21 下午 03:00 - 05:00", "new_doctor": "王醫師" }
 ```
 `new_doctor` 選填，不給就維持原醫師；可改掛診所任何一位醫師。
+
+### 病患帳號
+| API | 說明 |
+|---|---|
+| `POST /api/account/register` | `{name, id_number, birth_date, phone, password}`，已掛過號的病人生日需相符；回傳 `token` |
+| `POST /api/account/login` | `{account, password}`，`account` 可填手機或身分證字號；連續錯 5 次鎖 15 分鐘 |
+| `GET /api/account/me` | Header `Authorization: Bearer <token>`，回傳個人資料、就診紀錄、上次就診、最近一次問診 |
+| `POST /api/account/reset-password` | `{id_number, birth_date, new_password}`，重設後舊的登入憑證自動失效 |
+
+登入憑證由後端簽章（預設用 service role key 衍生；可另外在 `.env` 設定 `SESSION_SECRET`），有效 7 天。
 
 ### 修改聯絡手機
 `POST /api/patient/update`
