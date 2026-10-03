@@ -1410,6 +1410,51 @@ def admin_clinic_page(admin_username: str = Depends(verify_admin)):
     return _admin_page("admin_clinic.html")
 
 
+# ===== 聊天式掛號助理（規則版代理人，邏輯在 agent.py）=====
+# 代理人的「工具」直接沿用既有的後端功能，身分驗證、防超賣、班表檢查都照常把關。
+import agent as chat_agent
+from pydantic import ValidationError
+
+
+def _call_tool(fn, model_cls, **kwargs):
+    try:
+        return fn(model_cls(**kwargs))
+    except ValidationError as e:
+        return {"status": "error", "message": "；".join(err["msg"].replace("Value error, ", "") for err in e.errors())}
+
+
+AGENT_TOOLS = chat_agent.AgentTools(
+    questions=lambda part: get_clinic_questions().get(part) or get_clinic_questions().get("未明", []),
+    next_available=lambda department, doctor: get_next_available_slot(department, doctor),
+    clinic_schedule=lambda days: get_clinic_schedule(days),
+    book=lambda payload: _call_tool(confirm_booking, BookingRequest, **payload),
+    history=lambda id_number, birth: _call_tool(get_booking_history, HistoryRequest, id_number=id_number, birth_date=birth),
+    cancel=lambda id_number, birth, no: _call_tool(cancel_booking, CancelRequest, id_number=id_number, birth_date=birth, appointment_no=no),
+    reschedule=lambda id_number, birth, no, new_slot, new_doctor: _call_tool(
+        reschedule_booking, RescheduleRequest, id_number=id_number, birth_date=birth, appointment_no=no,
+        new_slot=new_slot, new_doctor=new_doctor),
+    rag=lambda question, metadata: rag_answer(AnswerRequest(question=question, top_k=3, metadata=metadata)),
+    doctors=DOCTORS,
+    category_labels=CATEGORY_LABELS,
+    referral_categories=REFERRAL_CATEGORIES,
+)
+
+
+class AgentChatRequest(BaseModel):
+    message: str = ""
+    state: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/agent/chat")
+def agent_chat(req: AgentChatRequest, authorization: Optional[str] = Header(default=None)):
+    """聊天式掛號助理：前端每一輪送「使用者這句話＋上一輪的對話狀態」，回傳助理的回覆、新狀態與快捷回覆。"""
+    profile = None
+    if authorization and supabase is not None:
+        patient = patient_from_token(authorization)
+        profile = account_profile(patient) if patient else None
+    return chat_agent.handle_turn(req.state, req.message, AGENT_TOOLS, profile=profile)
+
+
 # 管理者專用，帶有網頁介面的掛號總覽 API（需登入）
 @app.get("/api/admin/all_bookings", response_class=HTMLResponse)
 def get_all_bookings(admin_username: str = Depends(verify_admin)):

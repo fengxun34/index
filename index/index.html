@@ -30,7 +30,8 @@
       REMINDERS: "REMINDERS",
       REHAB: "REHAB",
       REFERRAL: "REFERRAL",
-      ACCOUNT: "ACCOUNT"
+      ACCOUNT: "ACCOUNT",
+      CHAT: "CHAT"
     };
 
     // 非骨科症狀關鍵字：偵測到這些且沒有合併骨骼關節相關描述時，
@@ -604,6 +605,14 @@
       const [accountTab, setAccountTab] = useState("login");
       const [accountForm, setAccountForm] = useState(EMPTY_ACCOUNT_FORM);
       const [accountLoading, setAccountLoading] = useState(false);
+      // 聊天式掛號助理
+      const [chatMessages, setChatMessages] = useState([]);
+      const [chatState, setChatState] = useState(null);
+      const [chatQuick, setChatQuick] = useState([]);
+      const [chatInput, setChatInput] = useState("");
+      const [chatLoading, setChatLoading] = useState(false);
+      const [chatSpeak, setChatSpeak] = useState(true);
+      const chatLogRef = useRef(null);
       const latestRef = useRef({ state: STATES.INIT, bodyPart: "", qaStep: 0, answers: {}, chatHistory: [] });
 
       useEffect(() => {
@@ -650,6 +659,11 @@
         setSearchId(account.profile.id_number); setSearchBirth(account.profile.birth_date);
         searchHistory(account.profile.id_number, account.profile.birth_date);
       }, [state, account?.profile]);
+
+      // 聊天訊息更新時自動捲到最下面
+      useEffect(() => {
+        if (chatLogRef.current) chatLogRef.current.scrollTop = chatLogRef.current.scrollHeight;
+      }, [chatMessages, chatLoading]);
 
       useEffect(() => { saveJson(REMINDER_STORAGE_KEY, reminders); }, [reminders]);
       useEffect(() => { saveJson(REMINDER_DONE_KEY, reminderDone); }, [reminderDone]);
@@ -1002,6 +1016,44 @@
         } finally {
           setAccountLoading(false);
         }
+      }
+
+      // ---------- 聊天式掛號助理 ----------
+      async function sendChat(text) {
+        const message = (text || "").trim();
+        if (chatLoading) return;
+        if (message) setChatMessages((prev) => [...prev, { role: "user", text: message }]);
+        setChatInput("");
+        setChatLoading(true);
+        try {
+          const headers = { "Content-Type": "application/json" };
+          if (account?.token) headers.Authorization = `Bearer ${account.token}`;
+          const res = await fetch(`${API_BASE}/api/agent/chat`, {
+            method: "POST", headers, body: JSON.stringify({ message, state: message ? chatState : null })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.reply) throw new Error(data.message || "回應異常");
+          setChatState(data.state);
+          setChatQuick(data.quick_replies || []);
+          setChatMessages((prev) => [...prev, { role: "assistant", text: data.reply, card: data.card }]);
+          if (chatSpeak) speak(data.reply.replace(/[📚⚠🎉✅]/g, ""));
+          if (data.card?.type === "booked" && account?.token) refreshAccount();
+        } catch (e) {
+          setChatMessages((prev) => [...prev, { role: "assistant", text: `抱歉，連線發生問題（${e.message}）。請確認後端已啟動後再試一次。` }]);
+        } finally {
+          setChatLoading(false);
+        }
+      }
+
+      function openChat() {
+        setChatMessages([]); setChatState(null); setChatQuick([]); setChatInput("");
+        goToFeature(STATES.CHAT, "AI 掛號助理：用聊天的方式完成問診與掛號");
+        setTimeout(() => sendChat(""), 0);
+      }
+
+      function startChatVoice() {
+        if (voiceTarget === "chat") { stopListening(); return; }
+        listenOnce("chat", (t) => sendChat(t));
       }
 
       function startRecord() {
@@ -2447,6 +2499,57 @@
         );
       }
 
+      function renderChatCard(card) {
+        if (!card || !card.doctor) return null;
+        const title = card.type === "booked" ? "🎉 掛號完成" : card.type === "confirm" ? "📝 請確認掛號資料" : "🗓 建議的門診時段";
+        return (
+          <div className={`chat-card ${card.type}`}>
+            <div className="chat-card-title">{title}</div>
+            {card.name ? <div className="ai-booking-row"><span>姓名</span><strong>{card.name}</strong></div> : null}
+            <div className="ai-booking-row"><span>醫師</span><strong>{card.doctor}{card.specialty ? `（${card.specialty}）` : ""}</strong></div>
+            <div className="ai-booking-row"><span>日期</span><strong>{spokenDate(card.date)}</strong></div>
+            <div className="ai-booking-row"><span>時段</span><strong>{card.time_slot}</strong></div>
+          </div>
+        );
+      }
+
+      function renderChat() {
+        return (
+          <div className="form-card chat-panel">
+            <div className="chat-toolbar">
+              <span className="chat-title">💬 AI 掛號助理</span>
+              <label className="chat-speak"><input type="checkbox" checked={chatSpeak} onChange={(e) => setChatSpeak(e.target.checked)} /> 語音播報</label>
+            </div>
+            <div className="chat-log" ref={chatLogRef}>
+              {chatMessages.map((m, i) => (
+                <div key={i} className={`chat-msg ${m.role === "user" ? "from-user" : "from-bot"}`}>
+                  <div className="chat-bubble">{m.text.split("\n").map((line, j) => <p key={j}>{line}</p>)}</div>
+                  {m.role === "assistant" ? renderChatCard(m.card) : null}
+                </div>
+              ))}
+              {chatLoading ? <div className="chat-msg from-bot"><div className="chat-bubble typing">助理正在處理…</div></div> : null}
+            </div>
+            {chatQuick.length ? (
+              <div className="chat-quick">
+                {chatQuick.map((q) => <button type="button" key={q} className="chip" onClick={() => sendChat(q)} disabled={chatLoading}>{q}</button>)}
+              </div>
+            ) : null}
+            <div className="chat-input-row">
+              <button type="button" className={`chat-mic ${voiceTarget === "chat" ? "recording" : ""}`} onClick={startChatVoice} aria-label="語音輸入">
+                {voiceTarget === "chat" ? "🛑" : "🎙"}
+              </button>
+              <input className="text-input" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="輸入訊息，例如：我膝蓋痛、下週二下午、確定"
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) sendChat(chatInput); }} />
+              <button type="button" className="mini-btn" onClick={() => sendChat(chatInput)} disabled={chatLoading || !chatInput.trim()}>送出</button>
+            </div>
+            <div className="chat-footer">
+              <button type="button" className="account-link" onClick={() => sendChat("重新開始")}>↺ 重新開始</button>
+              <button type="button" className="account-link" onClick={resetAll}>⬅ 回主畫面</button>
+            </div>
+          </div>
+        );
+      }
+
       function renderContent() {
         if (state === STATES.INIT) {
           return (
@@ -2469,6 +2572,11 @@
               <h3 className="section-title">請問需要什麼服務？</h3>
               <p className="helper-text">選一項開始，或直接用語音／文字描述症狀也可以。</p>
               <div className="intent-options">
+                <button type="button" className="intent-btn intent-chat" onClick={openChat}>
+                  <span className="intent-emoji">💬</span>
+                  <span className="intent-title">跟 AI 助理聊天掛號</span>
+                  <span className="intent-desc">用說的或打字，助理會一步步幫您問診、掛號、查詢或改時間</span>
+                </button>
                 <button type="button" className="intent-btn" onClick={() => {
                   setPrompt("請選擇不舒服的骨骼關節部位，或直接描述症狀");
                   speak("請選擇不舒服的骨骼關節部位，或直接描述症狀");
@@ -2749,6 +2857,7 @@
         if (state === STATES.REMINDERS) return renderReminders();
         if (state === STATES.REHAB) return renderRehab();
         if (state === STATES.ACCOUNT) return renderAccount();
+        if (state === STATES.CHAT) return renderChat();
 
         return renderDefaultInput();
       }
