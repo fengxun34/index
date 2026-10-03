@@ -14,6 +14,7 @@
 5d. RAG 帶入分流結果時，會回報知識庫是否支持分流結果
 5e. 病患帳號：註冊（生日需相符）、手機／身分證登入、登入後取得紀錄、忘記密碼後舊登入失效
 5f. 診所設定：公開問診題目、管理 API 需要登入（有設定 clinic_questions 表時再測自訂題目）
+5g. 聊天式掛號助理：開場、症狀問診、推薦門診時段、非骨科提醒
 6. 密碼雜湊機制正確（雜湊/比對本身，不需要知道真實管理員密碼）
 7. 後台登入失敗次數限制會生效（連續錯誤達上限後鎖定）
 8. 後台頁面沒有登入會被拒絕（401）
@@ -227,6 +228,21 @@ def main():
         check("診所設定：可取得問診題目", res.status_code == 200 and len(res.json().get("questions", {})) >= 10)
         check("診所設定：管理 API 需要登入", client.get("/api/admin/clinic/data").status_code == 401)
         check("今日看診清單：需要登入", client.get("/api/admin/today-data").status_code == 401)
+
+        # 5g. 聊天式掛號助理
+        res = client.post("/api/agent/chat", json={"message": "", "state": None}).json()
+        check("聊天助理：開場有回覆與快捷選項", res.get("reply") and res.get("quick_replies"))
+        res = client.post("/api/agent/chat", json={"message": "我膝蓋痛", "state": res["state"]}).json()
+        check("聊天助理：說出症狀後開始問診", res["state"].get("step") == "qa" and res["state"].get("part") == "膝關節")
+        st = res["state"]
+        for _ in range(5):
+            if st.get("step") != "qa":
+                break
+            res = client.post("/api/agent/chat", json={"message": "跳過這題", "state": st}).json()
+            st = res["state"]
+        check("聊天助理：問診完推薦醫師與時段", st.get("step") == "propose" and st.get("slot", {}).get("doctor") in app_module.DOCTORS)
+        res = client.post("/api/agent/chat", json={"message": "我胸悶", "state": None}).json()
+        check("聊天助理：非骨科症狀會提醒改掛其他科", "心臟內科" in res.get("reply", ""))
 
         # 6. 密碼雜湊機制本身正確（不需要知道真實管理員密碼，直接測雜湊/比對函式）
         test_password = "測試密碼_請忽略_Xk9!2p"
