@@ -54,6 +54,8 @@ def explain_db_error(e: Exception) -> Optional[str]:
         return None
     code = str(e.code or "")
     text = " ".join(str(x or "") for x in (e.message, e.details, e.hint)).lower()
+    if ("clinic_questions" in text or "clinic_knowledge" in text) and (code in ("42P01", "PGRST205") or "does not exist" in text or "could not find the table" in text):
+        return "Supabase 還沒建立診所自訂資料表：請到 SQL Editor 執行 sql/005_clinic_customization.sql。"
     if code in ("42P01", "PGRST205") or "does not exist" in text or "could not find the table" in text:
         return "Supabase 資料庫還沒建立資料表：請到 Supabase 專案的 SQL Editor，貼上並執行 sql/schema.sql。"
     if code in ("42703", "PGRST204") or "column" in text and ("not exist" in text or "could not find" in text):
@@ -470,9 +472,8 @@ def _extract_advice(content: str) -> str:
 
 @app.post("/rag/answer")
 def rag_answer(req: AnswerRequest):
-    global departments, contents, vectorizer, doc_matrix
     if vectorizer is None:
-        departments, contents, vectorizer, doc_matrix = load_sql_data()
+        rebuild_rag_index()
     if vectorizer is None:
         return {"answer": "知識庫尚未就緒", "retrieved_chunks": [], "agreement": None}
 
@@ -497,6 +498,7 @@ def rag_answer(req: AnswerRequest):
             "department": departments[i],
             "category_label": category_label(departments[i]),
             "content": contents[i],
+            "source": sources[i] if i < len(sources) else CLINIC_BASE_SOURCE,
             "score": s,
             "supports_triage": recommended is not None and departments[i] == recommended,
         }
@@ -1161,6 +1163,253 @@ def update_patient_contact(req: PatientUpdateRequest):
     except Exception as e:
         return {"status": "error", "message": db_error_message("修改資料失敗", e)}
 
+# ===== 診所自訂：問診題目與診所知識（診所專屬 RAG）=====
+# 問診題目：預設在 clinic_default_questions.json；診所在「診所設定頁」改過的部位存在 clinic_questions 表，
+#           有自訂就用自訂、沒有就用預設，前端開啟時向 /api/clinic/questions 取得。
+# 診所知識：存在 clinic_knowledge 表，跟 medical_sheet.csv 的基礎知識庫合併成同一個 RAG 索引。
+CLINIC_BASE_SOURCE = "本地骨科知識庫"
+with open(os.path.join(BASE_DIR, "clinic_default_questions.json"), encoding="utf-8") as _f:
+    DEFAULT_QUESTIONS: Dict[str, List[Dict[str, Any]]] = json.load(_f)
+BODY_PARTS = list(DEFAULT_QUESTIONS.keys())
+sources: List[str] = []
+
+
+def _clinic_rows(table: str, active_only: bool = False) -> list:
+    """讀取診所自訂資料；還沒執行 sql/005_clinic_customization.sql 時回傳空列表，系統照常用預設值。"""
+    if supabase is None:
+        return []
+    try:
+        q = supabase.table(table).select("*")
+        if active_only:
+            q = q.eq("active", True)
+        return q.execute().data or []
+    except Exception as e:
+        print(f"⚠️ 讀取 {table} 失敗（若尚未執行 sql/005_clinic_customization.sql 可忽略）：{e}")
+        return []
+
+
+def get_clinic_questions() -> Dict[str, List[Dict[str, Any]]]:
+    merged = {part: [dict(q) for q in qs] for part, qs in DEFAULT_QUESTIONS.items()}
+    custom: Dict[str, list] = defaultdict(list)
+    for row in _clinic_rows("clinic_questions"):
+        custom[row["body_part"]].append(row)
+    for part, rows in custom.items():
+        rows.sort(key=lambda r: r.get("sort_order") or 0)
+        merged[part] = [{"key": r["q_key"], "question": r["question"], "options": r.get("options") or []} for r in rows]
+    return merged
+
+
+def clinic_knowledge_content(row: dict) -> str:
+    # 跟 update.py 的格式一致，_extract_advice 才取得到「建議」那一段
+    return (f"部位：{row.get('body_part') or '不限'}。症狀：{row.get('keywords') or ''}。"
+            f"建議：{row.get('content') or ''}。看診醫師與時段：{CLINIC_NAME}。警告：{row.get('warning') or ''}")
+
+
+def rebuild_rag_index():
+    """重建 RAG 索引：基礎知識庫（vector_store.db）＋診所知識（clinic_knowledge 表）。"""
+    global departments, contents, sources, vectorizer, doc_matrix
+    base_depts, base_contents, base_vec, base_matrix = load_sql_data()
+    clinic = _clinic_rows("clinic_knowledge", active_only=True)
+    if not clinic:
+        departments, contents, vectorizer, doc_matrix = base_depts, base_contents, base_vec, base_matrix
+        sources = [CLINIC_BASE_SOURCE] * len(base_contents)
+        return
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    departments = list(base_depts) + [r.get("department") for r in clinic]
+    contents = list(base_contents) + [clinic_knowledge_content(r) for r in clinic]
+    sources = [CLINIC_BASE_SOURCE] * len(base_contents) + [f"診所知識：{r.get('title') or '未命名'}" for r in clinic]
+    vectorizer = TfidfVectorizer(ngram_range=(1, 3), analyzer="char_wb")
+    doc_matrix = vectorizer.fit_transform(contents).toarray().astype(np.float32)
+    print(f"✅ RAG 索引：基礎知識 {len(base_contents)} 筆＋診所知識 {len(clinic)} 筆")
+
+
+@app.on_event("startup")
+def _build_index_on_startup():
+    rebuild_rag_index()
+
+
+def rag_search(text: str, top_k: int = 3) -> list:
+    if vectorizer is None or not text:
+        return []
+    sims = cosine_similarity(vectorizer.transform([text]).toarray().astype(np.float32), doc_matrix)[0]
+    ranked = sorted(((i, float(s)) for i, s in enumerate(sims) if s > 0), key=lambda x: x[1], reverse=True)[:top_k]
+    return [{"department": departments[i], "category_label": category_label(departments[i]), "content": contents[i],
+             "source": sources[i] if i < len(sources) else CLINIC_BASE_SOURCE, "score": s} for i, s in ranked]
+
+
+class QuestionItem(BaseModel):
+    key: Optional[str] = None
+    question: str
+    options: Optional[List[str]] = None
+
+
+class QuestionSetRequest(BaseModel):
+    questions: List[QuestionItem]
+
+
+class KnowledgeRequest(BaseModel):
+    id: Optional[str] = None
+    title: str
+    body_part: Optional[str] = None
+    department: Optional[str] = None
+    keywords: Optional[str] = ""
+    content: str
+    warning: Optional[str] = ""
+    active: bool = True
+
+
+@app.get("/api/clinic/questions")
+def public_clinic_questions():
+    return {"status": "success", "questions": get_clinic_questions()}
+
+
+@app.get("/api/admin/clinic/data")
+def admin_clinic_data(admin_username: str = Depends(verify_admin)):
+    custom_parts = sorted({r["body_part"] for r in _clinic_rows("clinic_questions")})
+    knowledge = sorted(_clinic_rows("clinic_knowledge"), key=lambda r: r.get("created_at") or "")
+    return {
+        "status": "success",
+        "body_parts": BODY_PARTS,
+        "questions": get_clinic_questions(),
+        "custom_parts": custom_parts,
+        "knowledge": knowledge,
+        "categories": CATEGORY_LABELS,
+    }
+
+
+@app.put("/api/admin/clinic/questions/{body_part}")
+def admin_save_questions(body_part: str, req: QuestionSetRequest, admin_username: str = Depends(verify_admin)):
+    if body_part not in BODY_PARTS:
+        raise HTTPException(status_code=400, detail=f"部位不正確：{body_part}")
+    items = [q for q in req.questions if q.question.strip()]
+    if not items:
+        return {"status": "error", "message": "至少要有一題。"}
+    used = set()
+    rows = []
+    for idx, q in enumerate(items):
+        key = (q.key or "").strip() or f"q{idx + 1}"
+        while key in used:
+            key = f"{key}_{idx + 1}"
+        used.add(key)
+        options = [o.strip() for o in (q.options or []) if o.strip()]
+        rows.append({"body_part": body_part, "sort_order": idx, "q_key": key, "question": q.question.strip(), "options": options})
+    supabase.table("clinic_questions").delete().eq("body_part", body_part).execute()
+    supabase.table("clinic_questions").insert(rows).execute()
+    return {"status": "success", "message": f"已儲存「{body_part}」的 {len(rows)} 題問診題目。"}
+
+
+@app.delete("/api/admin/clinic/questions/{body_part}")
+def admin_reset_questions(body_part: str, admin_username: str = Depends(verify_admin)):
+    supabase.table("clinic_questions").delete().eq("body_part", body_part).execute()
+    return {"status": "success", "message": f"「{body_part}」已恢復成系統預設題目。"}
+
+
+@app.post("/api/admin/clinic/knowledge")
+def admin_save_knowledge(req: KnowledgeRequest, admin_username: str = Depends(verify_admin)):
+    if req.department and req.department not in ALLOWED_DEPARTMENTS:
+        return {"status": "error", "message": "問題類型不正確。"}
+    if not req.title.strip() or not req.content.strip():
+        return {"status": "error", "message": "標題與內容都要填寫。"}
+    payload = {
+        "title": req.title.strip(), "body_part": (req.body_part or "").strip() or None, "department": req.department or None,
+        "keywords": (req.keywords or "").strip(), "content": req.content.strip(), "warning": (req.warning or "").strip(),
+        "active": req.active, "updated_at": datetime.utcnow().isoformat(),
+    }
+    if req.id:
+        supabase.table("clinic_knowledge").update(payload).eq("id", req.id).execute()
+    else:
+        supabase.table("clinic_knowledge").insert(payload).execute()
+    rebuild_rag_index()
+    return {"status": "success", "message": "已儲存，AI 知識庫已更新。"}
+
+
+@app.delete("/api/admin/clinic/knowledge/{knowledge_id}")
+def admin_delete_knowledge(knowledge_id: str, admin_username: str = Depends(verify_admin)):
+    supabase.table("clinic_knowledge").delete().eq("id", knowledge_id).execute()
+    rebuild_rag_index()
+    return {"status": "success", "message": "已刪除，AI 知識庫已更新。"}
+
+
+def _age(birth: Optional[str], on_date: str) -> Optional[int]:
+    try:
+        b = datetime.strptime(birth, "%Y-%m-%d").date()
+        d = datetime.strptime(on_date, "%Y-%m-%d").date()
+        return d.year - b.year - ((d.month, d.day) < (b.month, b.day))
+    except Exception:
+        return None
+
+
+@app.get("/api/admin/today-data")
+def admin_today_data(date: Optional[str] = None, doctor: Optional[str] = None, admin_username: str = Depends(verify_admin)):
+    """醫師看診前摘要：某一天（預設今天）的看診清單，含問診問答、過去看診紀錄與相關的診所知識。"""
+    date = date or datetime.now().date().isoformat()
+    appts = [a for a in (supabase.table("appointments")
+                         .select("id, appointment_no, patient_id, department, doctor, appointment_date, time_slot, status")
+                         .eq("appointment_date", date).execute().data or [])
+             if a.get("status") != "cancelled" and (not doctor or a["doctor"] == doctor)]
+    patient_ids = list({a["patient_id"] for a in appts})
+    patients = {p["id"]: p for p in (supabase.table("patients").select("id, patient_no, name, birth_date")
+                                     .in_("id", patient_ids).execute().data or [])} if patient_ids else {}
+    triage = {t["appointment_id"]: t for t in (supabase.table("triage_records")
+                                               .select("appointment_id, body_part, main_complaint, qa_answers, ai_suggestion")
+                                               .in_("appointment_id", [a["id"] for a in appts]).execute().data or [])} if appts else {}
+    all_visits = (supabase.table("appointments").select("patient_id, appointment_date, doctor, department, status")
+                  .in_("patient_id", patient_ids).execute().data or []) if patient_ids else []
+    questions = get_clinic_questions()
+
+    items = []
+    for a in appts:
+        p = patients.get(a["patient_id"], {})
+        t = triage.get(a["id"]) or {}
+        past = sorted([v for v in all_visits if v["patient_id"] == a["patient_id"] and v["appointment_date"] < date
+                       and v.get("status") != "cancelled"], key=lambda v: v["appointment_date"])
+        # 題目文字：先找目前的題目；病人回答後診所又改過題目的話，再用系統預設題目對應，都找不到才顯示代碼
+        part = t.get("body_part") or ""
+        q_text = {q["key"]: q["question"] for q in DEFAULT_QUESTIONS.get(part, [])}
+        q_text.update({q["key"]: q["question"] for q in questions.get(part, [])})
+        qa = [{"question": q_text.get(k, k), "answer": v} for k, v in (t.get("qa_answers") or {}).items() if k != "mainComplaint"]
+        search_text = " ".join(filter(None, [t.get("body_part"), t.get("main_complaint")] + [x["answer"] for x in qa]))
+        hits = rag_search(search_text, top_k=3) if search_text else []
+        session = SESSION_BY_TIME_SLOT.get(a["time_slot"])
+        items.append({
+            "appointment_no": a.get("appointment_no"),
+            "doctor": a["doctor"],
+            "time_slot": a["time_slot"],
+            "session_order": SESSION_ORDER.index(session) if session in SESSION_ORDER else 9,
+            "patient_name": p.get("name"),
+            "patient_no": p.get("patient_no"),
+            "age": _age(p.get("birth_date"), date),
+            "visit_type": "複診" if past else "初診",
+            "past_visit_count": len(past),
+            "last_visit": ({"date": past[-1]["appointment_date"], "doctor": past[-1]["doctor"],
+                            "category_label": category_label(past[-1]["department"])} if past else None),
+            "category_label": category_label(a["department"]),
+            "body_part": t.get("body_part"),
+            "main_complaint": t.get("main_complaint"),
+            "qa": qa,
+            "ai_suggestion": t.get("ai_suggestion"),
+            "knowledge": [{"source": h["source"], "advice": _extract_advice(h["content"]),
+                           "warning": (re.search(r"警告：(.*)$", h["content"]) or [None, ""])[1]} for h in hits],
+        })
+    items.sort(key=lambda x: (x["session_order"], x["doctor"], x["appointment_no"] or 0))
+    return {"status": "success", "date": date, "doctors": list(DOCTORS.keys()), "items": items}
+
+
+def _admin_page(filename: str) -> HTMLResponse:
+    with open(os.path.join(BASE_DIR, filename), encoding="utf-8") as f:
+        return HTMLResponse(f.read())
+
+
+@app.get("/api/admin/today", response_class=HTMLResponse)
+def admin_today_page(admin_username: str = Depends(verify_admin)):
+    return _admin_page("admin_today.html")
+
+
+@app.get("/api/admin/clinic", response_class=HTMLResponse)
+def admin_clinic_page(admin_username: str = Depends(verify_admin)):
+    return _admin_page("admin_clinic.html")
+
+
 # 管理者專用，帶有網頁介面的掛號總覽 API（需登入）
 @app.get("/api/admin/all_bookings", response_class=HTMLResponse)
 def get_all_bookings(admin_username: str = Depends(verify_admin)):
@@ -1253,6 +1502,9 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
             <title>骨科診所掛號管理系統</title>
             <style>
                 body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; padding: 40px; color: #333; }}
+                .admin-nav {{ max-width: 1100px; margin: 0 auto 18px; display: flex; gap: 8px; flex-wrap: wrap; }}
+                .admin-nav a {{ padding: 8px 14px; border-radius: 999px; background: #fff; border: 1px solid #e2e8f0; color: #2563eb; text-decoration: none; font-weight: 700; font-size: 14px; }}
+                .admin-nav a.active {{ background: #2563eb; color: #fff; border-color: transparent; }}
                 h2 {{ text-align: center; color: #2c3e50; font-size: 28px; margin-bottom: 5px; }}
                 .subtitle {{ text-align: center; color: #7f8c8d; margin-bottom: 30px; }}
                 .container {{ max-width: 1100px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.08); }}
@@ -1272,6 +1524,11 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
             </style>
         </head>
         <body>
+            <nav class="admin-nav">
+                <a href="/api/admin/all_bookings" class="active">📋 掛號總覽</a>
+                <a href="/api/admin/today">🩺 今日看診清單</a>
+                <a href="/api/admin/clinic">⚙️ 診所設定（問診題目／知識庫）</a>
+            </nav>
             <div class="container">
                 <h2>🦴 {esc(CLINIC_NAME)}掛號總覽後台</h2>
                 <div class="subtitle">目前系統內共有 <strong>{len(rows)}</strong> 筆掛號紀錄</div>

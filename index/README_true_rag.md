@@ -23,6 +23,10 @@
 - 病歷號／掛號序號採連續編號，方便人工對照；AI 問診過程（部位、問答、AI 建議）會隨掛號存檔，後台可查看
 - 病患帳號：用「手機號碼或身分證字號＋密碼」登入，個人資料自動帶入、就診紀錄直接顯示，
   問診時若部位與上次相同，每題都可一鍵「跟上次一樣」；忘記密碼可用身分證＋生日重設；不登入也能照常掛號
+- 診所設定（`/api/admin/clinic`，需管理員登入）：依醫師問診流程**自訂各部位的問診題目與快捷選項**，
+  並建立**診所專屬知識庫**（療程、處理原則、警訊），存檔後立即與基礎知識庫合併成 RAG 索引；訪談醫師可用 `docs/醫師訪談表.md`
+- 今日看診清單（`/api/admin/today`，需管理員登入）：醫師看診前摘要，每位病人的初診／複診、主訴、問診問答、
+  上次看診、AI 建議與 AI 從知識庫找出的提醒，可依日期、醫師篩選並列印
 - 上次就診紀錄：查詢掛號時顯示最近一次已看診的科別、醫師、主訴與 AI 建議，可一鍵回診掛同一位醫師
 - 修改預約資訊：改期時可改掛同科別的其他醫師；可修改聯絡手機
 - X 光辨識器（示範版，**目前停用**，首頁不顯示；要開放時把 `index.html` 的 `ENABLE_XRAY` 改成 `true`）：上傳／拍攝 X 光片，檢查是否為灰階 X 光影像、提供亮度／對比／放大／反相檢視，
@@ -44,6 +48,8 @@ pip install -r requirements_true_rag.txt
    `appointments`（掛號紀錄）、`admin_users`（後台管理員登入）與 `triage_records`（AI 問診紀錄）四張資料表。
 
    > 📌 **已經建好資料庫、要加上病患帳號功能**：只要再執行 `sql/004_patient_accounts.sql`（新增密碼欄位，不會動到既有資料）。
+   >
+   > 📌 **要使用診所設定（自訂問診題目、診所知識庫）**：再執行 `sql/005_clinic_customization.sql`。沒執行也能用，只是會使用預設題目與基礎知識庫。
    >
    > 📌 如果你**已經**執行過舊版的 `sql/schema.sql`（`patients`／`appointments` 已經存在），
    > 改執行 `sql/002_add_sequential_ids_and_triage.sql` 來補上病歷號、掛號序號欄位與
@@ -204,6 +210,18 @@ python smoke_test.py
 依「現在時間」往後找，跳過已經開始或已額滿的時段，回傳該科別（或指定醫師）最快
 可以掛上的一個時段。AI 問診分流完成、或使用者直接講出科別／醫師名稱時，前端都是
 呼叫這支 API 取得建議時段，不是在前端寫死。
+
+### 診所設定與看診前摘要（需 HTTP Basic 登入）
+| 網址 | 說明 |
+|---|---|
+| `GET /api/admin/clinic` | 診所設定頁（問診題目、診所知識庫） |
+| `GET /api/admin/today` | 今日看診清單（看診前摘要） |
+| `GET /api/clinic/questions` | （公開）目前生效的問診題目，前端開啟時讀取 |
+| `GET /api/admin/clinic/data`、`PUT/DELETE /api/admin/clinic/questions/{部位}` | 讀取設定、儲存／恢復某部位題目 |
+| `POST /api/admin/clinic/knowledge`、`DELETE /api/admin/clinic/knowledge/{id}` | 新增／修改／刪除診所知識（存檔後自動重建 RAG 索引） |
+| `GET /api/admin/today-data?date=&doctor=` | 看診前摘要資料 |
+
+預設問診題目在 `clinic_default_questions.json`；診所改過的部位存在 `clinic_questions` 表，有自訂就用自訂。
 
 ### 後台掛號總覽（HTML 網頁，需 HTTP Basic 登入）
 `GET /api/admin/all_bookings`

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>診所設定</title>
+  <style>
+    :root { --primary: #2563eb; --muted: #64748b; --border: #e2e8f0; --bg: #f4f7f6; --text: #0f172a; --danger: #dc2626; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", "Noto Sans TC", sans-serif; background: var(--bg); color: var(--text); }
+    .container { max-width: 1000px; margin: 0 auto; padding: 24px 16px 60px; }
+    .admin-nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+    .admin-nav a { padding: 8px 14px; border-radius: 999px; background: #fff; border: 1px solid var(--border); color: var(--primary); text-decoration: none; font-weight: 700; font-size: 14px; }
+    .admin-nav a.active { background: var(--primary); color: #fff; border-color: transparent; }
+    h1 { margin: 0 0 4px; font-size: 26px; }
+    .subtitle { color: var(--muted); margin-bottom: 16px; line-height: 1.6; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+    .tabs button { flex: 1; padding: 11px; border-radius: 12px; border: 1px solid var(--border); background: #fff; font-weight: 800; font-size: 15px; cursor: pointer; color: var(--muted); }
+    .tabs button.active { background: var(--primary); color: #fff; border-color: transparent; }
+    .panel { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 18px; }
+    .tip { background: #fffbeb; border: 1px solid #fde68a; color: #78350f; border-radius: 12px; padding: 10px 14px; font-size: 14px; line-height: 1.6; margin-bottom: 14px; }
+    label { display: block; font-size: 14px; font-weight: 700; color: var(--muted); margin: 10px 0 4px; }
+    input[type=text], select, textarea { width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid #cbd5e1; font-size: 15px; font-family: inherit; }
+    textarea { min-height: 70px; resize: vertical; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .row > * { flex: 1; min-width: 160px; }
+    .btn { padding: 9px 16px; border-radius: 10px; border: none; background: var(--primary); color: #fff; font-weight: 700; cursor: pointer; font-size: 14px; }
+    .btn.ghost { background: #eef4ff; color: var(--primary); }
+    .btn.danger { background: #fef2f2; color: var(--danger); }
+    .btn.small { padding: 6px 10px; font-size: 13px; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 800; margin-left: 8px; vertical-align: middle; }
+    .badge.custom { background: #dcfce7; color: #166534; }
+    .badge.default { background: #f1f5f9; color: var(--muted); }
+    .q-item { border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin: 10px 0; background: #fafcff; }
+    .q-head { display: flex; justify-content: space-between; align-items: center; font-weight: 800; color: #1d4ed8; }
+    .q-actions { display: flex; gap: 6px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+    .status { margin-top: 12px; font-weight: 700; min-height: 1.4em; }
+    .status.ok { color: #047857; }
+    .status.err { color: var(--danger); }
+    .kb-list { margin-top: 18px; }
+    .kb-item { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 8px 0; }
+    .kb-item.off { opacity: 0.55; }
+    .kb-item h4 { margin: 0 0 4px; }
+    .kb-item .meta { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+    .kb-item p { margin: 4px 0; font-size: 14.5px; line-height: 1.6; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="admin-nav">
+      <a href="/api/admin/all_bookings">📋 掛號總覽</a>
+      <a href="/api/admin/today">🩺 今日看診清單</a>
+      <a href="/api/admin/clinic" class="active">⚙️ 診所設定（問診題目／知識庫）</a>
+    </nav>
+    <h1>⚙️ 診所設定</h1>
+    <div class="subtitle">把醫師平常的問診流程與診所的照護知識放進系統：病人問診時會用這裡的題目，AI 建議與看診前摘要會引用這裡的知識。存檔後立即生效，不需要改程式。</div>
+    <div class="tabs">
+      <button type="button" id="tab-q" class="active">🩺 問診題目</button>
+      <button type="button" id="tab-k">📚 診所知識庫（RAG）</button>
+    </div>
+
+    <div id="panel-q" class="panel">
+      <div class="tip">💡 建議先訪談醫師：「病人說這個部位不舒服時，您會依序問哪些問題？」把醫師的問題照順序填進來。快捷選項可以讓病人直接點選（用逗號分隔，例如：一天,兩天,一週）。</div>
+      <label>部位</label>
+      <select id="part"></select>
+      <div id="part-badge" style="margin-top:8px"></div>
+      <div id="q-list"></div>
+      <div class="actions">
+        <button type="button" class="btn ghost" id="q-add">＋ 新增一題</button>
+        <button type="button" class="btn" id="q-save">💾 儲存這個部位的題目</button>
+        <button type="button" class="btn danger" id="q-reset">↺ 恢復系統預設</button>
+      </div>
+      <div class="status" id="q-status"></div>
+    </div>
+
+    <div id="panel-k" class="panel hidden">
+      <div class="tip">💡 例如：診所提供的療程（震波、PRP）、醫師對某種狀況的處理原則、術後照護注意事項。「關鍵字」請寫病人常用的說法（例如：膝蓋卡卡、上下樓梯痛），AI 比較容易檢索到。</div>
+      <input type="hidden" id="k-id" />
+      <label>標題</label>
+      <input type="text" id="k-title" placeholder="例如：本院退化性膝關節炎處理原則" />
+      <div class="row">
+        <div><label>適用部位</label><select id="k-part"></select></div>
+        <div><label>對應問題類型</label><select id="k-dept"></select></div>
+      </div>
+      <label>關鍵字／病人常見說法</label>
+      <input type="text" id="k-keywords" placeholder="例如：膝蓋痛,上下樓梯痛,膝蓋卡卡,蹲下痛" />
+      <label>內容（建議或處理原則）</label>
+      <textarea id="k-content" placeholder="例如：先安排 X 光評估退化程度；輕中度以復健與肌力訓練為主，可考慮玻尿酸注射"></textarea>
+      <label>警訊（選填）</label>
+      <input type="text" id="k-warning" placeholder="例如：膝蓋突然紅腫熱痛合併發燒，請立即就醫" />
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="k-active" checked /> 啟用（停用後 AI 不會引用）</label>
+      <div class="actions">
+        <button type="button" class="btn" id="k-save">💾 儲存知識</button>
+        <button type="button" class="btn ghost" id="k-clear">清空表單（新增下一筆）</button>
+      </div>
+      <div class="status" id="k-status"></div>
+      <div class="kb-list" id="k-list"></div>
+    </div>
+  </div>
+
+  <script>
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    let data = null;
+    let draft = [];
+
+    function setStatus(id, msg, ok) {
+      const el = document.getElementById(id);
+      el.textContent = msg;
+      el.className = "status " + (ok ? "ok" : "err");
+    }
+
+    async function api(method, url, body) {
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.status === "error") throw new Error(json.message || (Array.isArray(json.detail) ? json.detail.map((d) => d.msg).join("；") : json.detail) || `HTTP ${res.status}`);
+      return json;
+    }
+
+    async function loadData() {
+      data = await api("GET", "/api/admin/clinic/data");
+      const partSel = document.getElementById("part");
+      if (!partSel.options.length) {
+        data.body_parts.forEach((p) => partSel.add(new Option(p, p)));
+        const kPart = document.getElementById("k-part");
+        kPart.add(new Option("不限", ""));
+        data.body_parts.forEach((p) => kPart.add(new Option(p, p)));
+        const kDept = document.getElementById("k-dept");
+        kDept.add(new Option("不限", ""));
+        Object.entries(data.categories).forEach(([code, label]) => kDept.add(new Option(label, code)));
+      }
+      loadPart();
+      renderKnowledge();
+    }
+
+    // ---------- 問診題目 ----------
+    function loadPart() {
+      const part = document.getElementById("part").value;
+      draft = (data.questions[part] || []).map((q) => ({ key: q.key, question: q.question, options: (q.options || []).join(",") }));
+      const custom = data.custom_parts.includes(part);
+      document.getElementById("part-badge").innerHTML = custom
+        ? `<span class="badge custom">已依醫師流程自訂</span>` : `<span class="badge default">目前使用系統預設題目</span>`;
+      document.getElementById("q-reset").style.display = custom ? "" : "none";
+      renderDraft();
+    }
+
+    function renderDraft() {
+      document.getElementById("q-list").innerHTML = draft.map((q, i) => `
+        <div class="q-item">
+          <div class="q-head">第 ${i + 1} 題
+            <span class="q-actions">
+              <button type="button" class="btn ghost small" data-act="up" data-i="${i}" ${i === 0 ? "disabled" : ""}>↑</button>
+              <button type="button" class="btn ghost small" data-act="down" data-i="${i}" ${i === draft.length - 1 ? "disabled" : ""}>↓</button>
+              <button type="button" class="btn danger small" data-act="del" data-i="${i}">刪除</button>
+            </span>
+          </div>
+          <label>題目</label>
+          <textarea data-field="question" data-i="${i}">${esc(q.question)}</textarea>
+          <label>快捷選項（選填，用逗號分隔）</label>
+          <input type="text" data-field="options" data-i="${i}" value="${esc(q.options)}" placeholder="例如：一天,兩天,一週,大於一週" />
+        </div>`).join("");
+    }
+
+    document.getElementById("q-list").addEventListener("input", (e) => {
+      const i = e.target.dataset.i, field = e.target.dataset.field;
+      if (i !== undefined && field) draft[i][field] = e.target.value;
+    });
+    document.getElementById("q-list").addEventListener("click", (e) => {
+      const act = e.target.dataset.act, i = Number(e.target.dataset.i);
+      if (!act) return;
+      if (act === "del") draft.splice(i, 1);
+      if (act === "up" && i > 0) [draft[i - 1], draft[i]] = [draft[i], draft[i - 1]];
+      if (act === "down" && i < draft.length - 1) [draft[i + 1], draft[i]] = [draft[i], draft[i + 1]];
+      renderDraft();
+    });
+    document.getElementById("part").addEventListener("change", () => { setStatus("q-status", "", true); loadPart(); });
+    document.getElementById("q-add").addEventListener("click", () => { draft.push({ key: "", question: "", options: "" }); renderDraft(); });
+    document.getElementById("q-save").addEventListener("click", async () => {
+      const part = document.getElementById("part").value;
+      try {
+        const res = await api("PUT", `/api/admin/clinic/questions/${encodeURIComponent(part)}`, {
+          questions: draft.map((q) => ({ key: q.key || null, question: q.question, options: q.options.split(/[,，、]/).map((o) => o.trim()).filter(Boolean) }))
+        });
+        await loadData();
+        document.getElementById("part").value = part; loadPart();
+        setStatus("q-status", res.message, true);
+      } catch (e) { setStatus("q-status", "儲存失敗：" + e.message, false); }
+    });
+    document.getElementById("q-reset").addEventListener("click", async () => {
+      const part = document.getElementById("part").value;
+      if (!confirm(`確定要把「${part}」恢復成系統預設題目嗎？`)) return;
+      try {
+        const res = await api("DELETE", `/api/admin/clinic/questions/${encodeURIComponent(part)}`);
+        await loadData();
+        document.getElementById("part").value = part; loadPart();
+        setStatus("q-status", res.message, true);
+      } catch (e) { setStatus("q-status", "失敗：" + e.message, false); }
+    });
+
+    // ---------- 診所知識 ----------
+    function fillForm(k) {
+      document.getElementById("k-id").value = k?.id || "";
+      document.getElementById("k-title").value = k?.title || "";
+      document.getElementById("k-part").value = k?.body_part || "";
+      document.getElementById("k-dept").value = k?.department || "";
+      document.getElementById("k-keywords").value = k?.keywords || "";
+      document.getElementById("k-content").value = k?.content || "";
+      document.getElementById("k-warning").value = k?.warning || "";
+      document.getElementById("k-active").checked = k ? k.active !== false : true;
+    }
+
+    function renderKnowledge() {
+      const list = data.knowledge || [];
+      document.getElementById("k-list").innerHTML = `<h3>已建立的診所知識（${list.length} 筆）</h3>` + (list.length ? list.map((k) => `
+        <div class="kb-item ${k.active === false ? "off" : ""}">
+          <h4>${esc(k.title)}${k.active === false ? "（已停用）" : ""}</h4>
+          <div class="meta">部位：${esc(k.body_part || "不限")}　問題類型：${esc(data.categories[k.department] || "不限")}　關鍵字：${esc(k.keywords || "－")}</div>
+          <p>${esc(k.content)}</p>
+          ${k.warning ? `<p style="color:#b45309">⚠ ${esc(k.warning)}</p>` : ""}
+          <div class="actions">
+            <button type="button" class="btn ghost small" data-edit="${esc(k.id)}">編輯</button>
+            <button type="button" class="btn danger small" data-delete="${esc(k.id)}">刪除</button>
+          </div>
+        </div>`).join("") : `<p style="color:var(--muted)">還沒有診所知識，從上方新增第一筆吧。</p>`);
+    }
+
+    document.getElementById("k-list").addEventListener("click", async (e) => {
+      const editId = e.target.dataset.edit, delId = e.target.dataset.delete;
+      if (editId) { fillForm(data.knowledge.find((k) => k.id === editId)); window.scrollTo({ top: 0, behavior: "smooth" }); setStatus("k-status", "編輯中，修改後按「儲存知識」。", true); }
+      if (delId) {
+        if (!confirm("確定要刪除這筆知識嗎？")) return;
+        try { const res = await api("DELETE", `/api/admin/clinic/knowledge/${encodeURIComponent(delId)}`); await loadData(); setStatus("k-status", res.message, true); }
+        catch (err) { setStatus("k-status", "刪除失敗：" + err.message, false); }
+      }
+    });
+    document.getElementById("k-clear").addEventListener("click", () => { fillForm(null); setStatus("k-status", "", true); });
+    document.getElementById("k-save").addEventListener("click", async () => {
+      try {
+        const res = await api("POST", "/api/admin/clinic/knowledge", {
+          id: document.getElementById("k-id").value || null,
+          title: document.getElementById("k-title").value,
+          body_part: document.getElementById("k-part").value || null,
+          department: document.getElementById("k-dept").value || null,
+          keywords: document.getElementById("k-keywords").value,
+          content: document.getElementById("k-content").value,
+          warning: document.getElementById("k-warning").value,
+          active: document.getElementById("k-active").checked,
+        });
+        fillForm(null);
+        await loadData();
+        setStatus("k-status", res.message, true);
+      } catch (e) { setStatus("k-status", "儲存失敗：" + e.message, false); }
+    });
+
+    // ---------- 分頁 ----------
+    function showTab(which) {
+      document.getElementById("tab-q").classList.toggle("active", which === "q");
+      document.getElementById("tab-k").classList.toggle("active", which === "k");
+      document.getElementById("panel-q").classList.toggle("hidden", which !== "q");
+      document.getElementById("panel-k").classList.toggle("hidden", which !== "k");
+    }
+    document.getElementById("tab-q").addEventListener("click", () => showTab("q"));
+    document.getElementById("tab-k").addEventListener("click", () => showTab("k"));
+
+    loadData().catch((e) => {
+      document.querySelector(".container").insertAdjacentHTML("beforeend", `<div class="status err">讀取失敗：${esc(e.message)}</div>`);
+    });
+  </script>
+</body>
+</html>

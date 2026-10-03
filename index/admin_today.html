@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>今日看診清單</title>
+  <style>
+    :root { --primary: #2563eb; --muted: #64748b; --border: #e2e8f0; --bg: #f4f7f6; --text: #0f172a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Segoe UI", "Noto Sans TC", sans-serif; background: var(--bg); color: var(--text); }
+    .container { max-width: 1000px; margin: 0 auto; padding: 24px 16px 60px; }
+    .admin-nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+    .admin-nav a { padding: 8px 14px; border-radius: 999px; background: #fff; border: 1px solid var(--border); color: var(--primary); text-decoration: none; font-weight: 700; font-size: 14px; }
+    .admin-nav a.active { background: var(--primary); color: #fff; border-color: transparent; }
+    h1 { margin: 0 0 4px; font-size: 26px; }
+    .subtitle { color: var(--muted); margin-bottom: 18px; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; background: #fff; padding: 14px; border-radius: 14px; border: 1px solid var(--border); margin-bottom: 18px; }
+    .controls label { font-size: 14px; color: var(--muted); font-weight: 700; }
+    .controls input, .controls select { padding: 8px 10px; border-radius: 10px; border: 1px solid #cbd5e1; font-size: 15px; }
+    .controls button { padding: 9px 16px; border-radius: 10px; border: none; background: var(--primary); color: #fff; font-weight: 700; cursor: pointer; }
+    .controls button.ghost { background: #eef4ff; color: var(--primary); }
+    .summary { font-weight: 700; margin-bottom: 12px; }
+    .slot-title { margin: 22px 0 10px; font-size: 17px; color: #1d4ed8; border-bottom: 2px solid #dbeafe; padding-bottom: 6px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 16px 18px; margin-bottom: 12px; box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05); break-inside: avoid; }
+    .card-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+    .patient { font-size: 18px; font-weight: 800; }
+    .meta { color: var(--muted); font-size: 14px; }
+    .tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+    .tag { padding: 3px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; background: #eff6ff; color: #1d4ed8; }
+    .tag.first { background: #fef3c7; color: #92400e; }
+    .tag.repeat { background: #dcfce7; color: #166534; }
+    .row { margin: 6px 0; font-size: 15px; line-height: 1.6; }
+    .row b { color: #334155; }
+    .qa { margin: 6px 0 0; padding-left: 18px; font-size: 14.5px; line-height: 1.7; }
+    .qa span { color: var(--muted); }
+    .kb { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: #f8fafc; border: 1px dashed #cbd5e1; }
+    .kb-title { font-weight: 800; font-size: 14px; margin-bottom: 4px; }
+    .kb-item { font-size: 14px; line-height: 1.6; margin: 4px 0; }
+    .kb-source { font-weight: 700; color: #0f766e; }
+    .kb-warn { color: #b45309; }
+    .empty { text-align: center; color: var(--muted); padding: 40px; border: 2px dashed #cbd5e1; border-radius: 14px; background: #fff; }
+    .error { color: #b91c1c; font-weight: 700; padding: 16px; background: #fef2f2; border-radius: 12px; }
+    @media print {
+      .admin-nav, .controls, .no-print { display: none !important; }
+      body { background: #fff; }
+      .card { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="admin-nav">
+      <a href="/api/admin/all_bookings">📋 掛號總覽</a>
+      <a href="/api/admin/today" class="active">🩺 今日看診清單</a>
+      <a href="/api/admin/clinic">⚙️ 診所設定（問診題目／知識庫）</a>
+    </nav>
+    <h1>🩺 今日看診清單</h1>
+    <div class="subtitle">看診前摘要：病人的主訴、AI 問診問答、過去看診紀錄，以及 AI 從診所知識庫找出的相關提醒。</div>
+    <div class="controls">
+      <label>日期 <input type="date" id="date" /></label>
+      <label>醫師 <select id="doctor"><option value="">全部醫師</option></select></label>
+      <button type="button" id="reload">重新整理</button>
+      <button type="button" class="ghost" onclick="window.print()">🖨 列印</button>
+    </div>
+    <div id="result"></div>
+  </div>
+  <script>
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const today = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    document.getElementById("date").value = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+
+    function card(it) {
+      const visit = it.visit_type === "複診"
+        ? `<span class="tag repeat">複診（過去 ${it.past_visit_count} 次）</span>`
+        : `<span class="tag first">初診</span>`;
+      const qa = it.qa.length
+        ? `<ul class="qa">${it.qa.map((x) => `<li><span>${esc(x.question)}</span><br>→ ${esc(x.answer)}</li>`).join("")}</ul>`
+        : `<div class="row meta">（略過問診直接掛號，沒有問答紀錄）</div>`;
+      const last = it.last_visit
+        ? `<div class="row"><b>上次看診：</b>${esc(it.last_visit.date)}　${esc(it.last_visit.doctor)}　${esc(it.last_visit.category_label)}</div>` : "";
+      const kb = it.knowledge.length
+        ? `<div class="kb"><div class="kb-title">📚 AI 知識庫提醒</div>${it.knowledge.map((k) => `
+            <div class="kb-item"><span class="kb-source">【${esc(k.source)}】</span>${esc(k.advice)}
+            ${k.warning ? `<br><span class="kb-warn">⚠ ${esc(k.warning)}</span>` : ""}</div>`).join("")}</div>` : "";
+      return `
+        <div class="card">
+          <div class="card-head">
+            <div class="patient">${esc(it.patient_name || "（未知病人）")}
+              <span class="meta">${it.age != null ? `${it.age} 歲` : ""}${it.patient_no ? `　病歷號 ${esc(it.patient_no)}` : ""}</span></div>
+            <div class="meta">#${esc(it.appointment_no)}　${esc(it.doctor)}</div>
+          </div>
+          <div class="tags">${visit}<span class="tag">${esc(it.category_label)}</span>${it.body_part ? `<span class="tag">${esc(it.body_part)}</span>` : ""}</div>
+          ${it.main_complaint ? `<div class="row"><b>主訴：</b>${esc(it.main_complaint)}</div>` : ""}
+          ${qa}
+          ${last}
+          ${it.ai_suggestion ? `<div class="row"><b>AI 建議：</b>${esc(it.ai_suggestion)}</div>` : ""}
+          ${kb}
+        </div>`;
+    }
+
+    async function load() {
+      const date = document.getElementById("date").value;
+      const doctor = document.getElementById("doctor").value;
+      const box = document.getElementById("result");
+      box.innerHTML = `<div class="meta">載入中...</div>`;
+      try {
+        const res = await fetch(`/api/admin/today-data?date=${encodeURIComponent(date)}&doctor=${encodeURIComponent(doctor)}`);
+        const data = await res.json();
+        if (data.status !== "success") { box.innerHTML = `<div class="error">${esc(data.message || "讀取失敗")}</div>`; return; }
+        const sel = document.getElementById("doctor");
+        if (sel.options.length === 1) data.doctors.forEach((d) => sel.add(new Option(d, d)));
+        if (!data.items.length) { box.innerHTML = `<div class="empty">${esc(data.date)} 沒有掛號。</div>`; return; }
+        const groups = {};
+        data.items.forEach((it) => { (groups[it.time_slot] = groups[it.time_slot] || []).push(it); });
+        const first = data.items.filter((it) => it.visit_type === "初診").length;
+        box.innerHTML = `<div class="summary">${esc(data.date)}　共 ${data.items.length} 位病人（初診 ${first}、複診 ${data.items.length - first}）</div>` +
+          Object.entries(groups).map(([slot, list]) => `<h2 class="slot-title">${esc(slot)}（${list.length} 位）</h2>${list.map(card).join("")}`).join("");
+      } catch (e) {
+        box.innerHTML = `<div class="error">連線後端失敗，請確認伺服器已啟動。</div>`;
+      }
+    }
+    document.getElementById("reload").addEventListener("click", load);
+    document.getElementById("date").addEventListener("change", load);
+    document.getElementById("doctor").addEventListener("change", load);
+    load();
+  </script>
+</body>
+</html>
