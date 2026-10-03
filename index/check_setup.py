@@ -149,6 +149,12 @@ def main():
     except Exception:
         schema_ok = False
         bad("patients 缺少病患帳號欄位（password_hash）", "到 SQL Editor 執行 sql/004_patient_accounts.sql")
+    for table in ["clinic_questions", "clinic_knowledge"]:
+        try:
+            sb.table(table).select("*").limit(1).execute()
+            ok(f"診所自訂資料表 {table}")
+        except Exception:
+            warn(f"還沒有 {table} 資料表：系統會照常使用預設題目與基礎知識庫；要使用「診所設定」頁，請到 SQL Editor 執行 sql/005_clinic_customization.sql")
     try:
         # p_max_per_slot=0 會在寫入前就回報 SLOT_FULL，不會真的新增資料，只用來確認函式存在
         sb.rpc("book_appointment_slot", {

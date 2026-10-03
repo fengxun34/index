@@ -13,6 +13,7 @@
 5c. 查詢需要身分證＋生日；不能用別人的身分證字號＋假生日掛號來改掉對方的生日
 5d. RAG 帶入分流結果時，會回報知識庫是否支持分流結果
 5e. 病患帳號：註冊（生日需相符）、手機／身分證登入、登入後取得紀錄、忘記密碼後舊登入失效
+5f. 診所設定：公開問診題目、管理 API 需要登入（有設定 clinic_questions 表時再測自訂題目）
 6. 密碼雜湊機制正確（雜湊/比對本身，不需要知道真實管理員密碼）
 7. 後台登入失敗次數限制會生效（連續錯誤達上限後鎖定）
 8. 後台頁面沒有登入會被拒絕（401）
@@ -220,6 +221,12 @@ def main():
         res = client.get("/api/account/me", headers={"Authorization": f"Bearer {token}"})
         check("帳號：重設密碼後舊的登入失效", res.status_code == 401)
         app_module._failed_login_attempts.pop(f"patient:{acct_phone}", None)
+
+        # 5f. 診所設定
+        res = client.get("/api/clinic/questions")
+        check("診所設定：可取得問診題目", res.status_code == 200 and len(res.json().get("questions", {})) >= 10)
+        check("診所設定：管理 API 需要登入", client.get("/api/admin/clinic/data").status_code == 401)
+        check("今日看診清單：需要登入", client.get("/api/admin/today-data").status_code == 401)
 
         # 6. 密碼雜湊機制本身正確（不需要知道真實管理員密碼，直接測雜湊/比對函式）
         test_password = "測試密碼_請忽略_Xk9!2p"

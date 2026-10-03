@@ -610,6 +610,24 @@
         latestRef.current = { state, bodyPart, qaStep, answers, chatHistory };
       }, [state, bodyPart, qaStep, answers, chatHistory]);
 
+      // 開啟網頁時，向後端取得診所自訂的問診題目（診所設定頁改過的部位會覆蓋程式內建的預設題目）；
+      // 後端連不到時就繼續用內建題目
+      const [, setQuestionsVersion] = useState(0);
+      useEffect(() => {
+        fetch(`${API_BASE}/api/clinic/questions`)
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.status !== "success" || !data.questions) return;
+            for (const [part, list] of Object.entries(data.questions)) {
+              if (Array.isArray(list) && list.length) {
+                symptomDB[part] = { questions: list.map((q) => ({ key: q.key, q: q.question, options: q.options || [] })) };
+              }
+            }
+            setQuestionsVersion((v) => v + 1);
+          })
+          .catch(() => {});
+      }, []);
+
       // 開啟網頁時，若這台裝置之前登入過，就自動恢復登入並帶入資料
       useEffect(() => {
         const token = loadJson(SESSION_STORAGE_KEY, null);
@@ -1572,8 +1590,12 @@
         if (state !== STATES.QA) return null;
         const questions = symptomDB[bodyPart]?.questions || [];
         const currentQ = questions[qaStep];
-        if (!currentQ || currentQ.key !== "duration") return null;
-        const options = ["一天", "兩天", "三天", "一週", "大於一週"];
+        if (!currentQ) return null;
+        // 快捷選項：優先用診所設定的選項；舊資料沒有選項時，「持續多久」維持原本的預設選項
+        const options = currentQ.options && currentQ.options.length
+          ? currentQ.options
+          : (currentQ.key === "duration" ? ["一天", "兩天", "三天", "一週", "大於一週"] : []);
+        if (!options.length) return null;
         return (
           <div className="option-row" aria-label="快捷選項">
             {options.map((opt) => (<button key={opt} type="button" className="option-btn" onClick={() => submitQuickOption(opt)}>{opt}</button>))}

@@ -1,0 +1,249 @@
+{
+ "頸椎": [
+  {
+   "key": "pain",
+   "question": "請問是痠痛、刺痛，還是合併手部麻木無力？",
+   "options": []
+  },
+  {
+   "key": "radiate",
+   "question": "疼痛是否會延伸到肩膀或手臂？",
+   "options": []
+  },
+  {
+   "key": "duration",
+   "question": "已經持續多久了？",
+   "options": [
+    "一天",
+    "兩天",
+    "三天",
+    "一週",
+    "大於一週"
+   ]
+  }
+ ],
+ "腰椎": [
+  {
+   "key": "pain",
+   "question": "請問是痠痛、悶痛，還是劇烈刺痛？",
+   "options": []
+  },
+  {
+   "key": "radiate",
+   "question": "疼痛是否延伸到臀部或腿部，合併麻木感？",
+   "options": []
+  },
+  {
+   "key": "duration",
+   "question": "已經持續多久了？",
+   "options": [
+    "一天",
+    "兩天",
+    "三天",
+    "一週",
+    "大於一週"
+   ]
+  }
+ ],
+ "兒童": [
+  {
+   "key": "childAge",
+   "question": "請問是幾歲的小朋友？主要哪個部位不舒服？",
+   "options": []
+  },
+  {
+   "key": "childCause",
+   "question": "是因為跌倒受傷、運動傷害，還是走路姿勢／腿型異常被發現的？",
+   "options": []
+  },
+  {
+   "key": "duration",
+   "question": "這個情況注意到多久了？",
+   "options": [
+    "一天",
+    "兩天",
+    "三天",
+    "一週",
+    "大於一週"
+   ]
+  }
+ ],
+ "腫瘤": [
+  {
+   "key": "lump",
+   "question": "是否有摸到腫塊？大小、位置在哪裡？",
+   "options": []
+  },
+  {
+   "key": "growth",
+   "question": "腫塊是否持續變大，或合併疼痛、體重下降？",
+   "options": []
+  },
+  {
+   "key": "duration",
+   "question": "已經持續多久了？",
+   "options": [
+    "一天",
+    "兩天",
+    "三天",
+    "一週",
+    "大於一週"
+   ]
+  }
+ ],
+ "高壓氧": [
+  {
+   "key": "condition",
+   "question": "請問是慢性傷口／骨髓炎，還是一氧化碳中毒或放射治療後的問題？",
+   "options": []
+  },
+  {
+   "key": "duration",
+   "question": "這個狀況已經持續多久了？",
+   "options": [
+    "一天",
+    "兩天",
+    "三天",
+    "一週",
+    "大於一週"
+   ]
+  }
+ ],
+ "肩關節": [
+  {
+   "key": "pain",
+   "question": "請問是抬手時痛、夜間痛，還是有卡住的感覺？",
+   "options": []
+  },
+  {
+   "key": "injury",
+   "question": "是否因跌倒、運動或搬重物而受傷？",
+   "options": []
+  },
+  {
+   "key": "duration",
+   "question": "已經持續多久了？",
+   "options": [
+    "一天",
+    "兩天",
+    "三天",
+    "一週",
+    "大於一週"
+   ]
+  }
+ ],
+ "肘腕": [
+  {
+   "key": "pain",
+   "question": "請問是手肘外側、手腕，還是手指關節疼痛？",
+   "options": []
+  },
+  {
+   "key": "injury",
+   "question": "是否因跌倒、扭傷，或重複性動作（如打字、搬重物）引起？",
+   "options": []
+  },
+  {
+   "key": "numb",
+   "question": "是否有手指麻木或無力的情形？",
+   "options": []
+  }
+ ],
+ "髖關節": [
+  {
+   "key": "pain",
+   "question": "請問是鼠蹊部、臀部，還是大腿外側疼痛？",
+   "options": []
+  },
+  {
+   "key": "walk",
+   "question": "走路或上下樓梯時是否會加劇疼痛？",
+   "options": []
+  },
+  {
+   "key": "duration",
+   "question": "已經持續多久了？",
+   "options": [
+    "一天",
+    "兩天",
+    "三天",
+    "一週",
+    "大於一週"
+   ]
+  }
+ ],
+ "膝關節": [
+  {
+   "key": "pain",
+   "question": "請問是關節內部痠痛、腫脹，還是活動時有喀喀聲？",
+   "options": []
+  },
+  {
+   "key": "injury",
+   "question": "是否因運動、扭傷，或長期退化引起？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "是否有明顯腫脹、發熱，或無法完全伸直彎曲？",
+   "options": []
+  }
+ ],
+ "足踝": [
+  {
+   "key": "pain",
+   "question": "請問是扭傷、腳跟痛，還是足底筋膜疼痛？",
+   "options": []
+  },
+  {
+   "key": "weight",
+   "question": "目前是否可以正常承重走路？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "是否有腫脹、瘀青，或明顯變形？",
+   "options": []
+  }
+ ],
+ "外傷": [
+  {
+   "key": "mechanism",
+   "question": "請問是如何受傷的？例如跌倒、車禍，還是運動撞擊？",
+   "options": []
+  },
+  {
+   "key": "deformity",
+   "question": "受傷部位是否有明顯變形、腫脹或無法活動？",
+   "options": []
+  },
+  {
+   "key": "openWound",
+   "question": "是否有傷口出血，或骨頭外露的情形？",
+   "options": []
+  }
+ ],
+ "未明": [
+  {
+   "key": "general",
+   "question": "請描述最主要不舒服的骨骼或關節部位。",
+   "options": []
+  },
+  {
+   "key": "duration",
+   "question": "這個情況持續多久了？",
+   "options": [
+    "一天",
+    "兩天",
+    "三天",
+    "一週",
+    "大於一週"
+   ]
+  },
+  {
+   "key": "severity",
+   "question": "症狀是否已經影響日常生活或工作？",
+   "options": []
+  }
+ ]
+}
