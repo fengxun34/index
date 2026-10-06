@@ -565,6 +565,28 @@ def _rag_retrieve(req: AnswerRequest):
         "recommended_department": recommended,
     }
 
+class NextQuestionRequest(BaseModel):
+    body_part: str
+    answers: Dict[str, str] = {}
+    remaining_keys: List[str] = []
+
+
+@app.post("/api/triage/next-question")
+def triage_next_question(req: NextQuestionRequest):
+    """問診追問：從診所題庫的「尚未問過」題目中，由 GPT 挑下一題或判斷可結束；沒有金鑰或失敗就照原順序。"""
+    bank = get_clinic_questions().get(req.body_part) or []
+    remaining = [q for q in bank if q["key"] in set(req.remaining_keys)]
+    chunks = []
+    if remaining and os.getenv("OPENAI_API_KEY"):
+        question = "。".join([f"部位：{req.body_part}"] + [str(v) for v in req.answers.values() if str(v).strip()])
+        try:
+            chunks = _rag_retrieve(AnswerRequest(question=question, top_k=3, metadata={"body_part": req.body_part})).get("retrieved_chunks", [])
+        except Exception:
+            chunks = []
+    choice = triage_questions.choose_next(req.body_part, req.answers, remaining, chunks)
+    return {"status": "success", **choice}
+
+
 @app.get("/api/clinic/info")
 def get_clinic_info():
     """診所基本資料：醫師名單與擅長項目、問題類型白話名稱、需轉診的問題類型（前端顯示用）。"""
@@ -1458,6 +1480,7 @@ def admin_clinic_page(admin_username: str = Depends(verify_admin)):
 import agent as chat_agent
 import agent_llm
 import rag_generate
+import triage_questions
 from pydantic import ValidationError
 
 

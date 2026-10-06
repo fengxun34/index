@@ -189,7 +189,7 @@
       };
     }
 
-    // ===== 復健／用藥提醒：存在這台裝置的瀏覽器裡（localStorage），不會上傳到伺服器 =====
+    // ===== 復健提醒：存在這台裝置的瀏覽器裡（localStorage），不會上傳到伺服器 =====
     const SESSION_STORAGE_KEY = "ortho_session_token_v1"; // 病患帳號的登入憑證（只存在這台裝置）
     const EMPTY_ACCOUNT_FORM = { account: "", password: "", password2: "", name: "", idNumber: "", birth: "", phone: "" };
     const REMINDER_STORAGE_KEY = "ortho_reminders_v1";
@@ -224,7 +224,7 @@
       for (const r of reminders) {
         if (!r.enabled || !r.days.length) continue;
         const [hh, mm] = r.time.split(":");
-        const label = r.type === "med" ? "💊 用藥" : "🏃 復健";
+        const label = "🏃 復健";
         lines.push(
           "BEGIN:VEVENT",
           `UID:${r.id}@ortho-triage`,
@@ -581,10 +581,10 @@
       const [xrayPart, setXrayPart] = useState("");
       const [xrayView, setXrayView] = useState({ brightness: 100, contrast: 100, invert: false, zoom: 1 });
 
-      // 復健／用藥提醒（只存在這台裝置）
-      const [reminders, setReminders] = useState(() => loadJson(REMINDER_STORAGE_KEY, []));
+      // 復健提醒（只存在這台裝置）
+      const [reminders, setReminders] = useState(() => loadJson(REMINDER_STORAGE_KEY, []).filter((r) => r.type !== "med")); // 已移除用藥提醒，舊資料一併濾掉
       const [reminderDone, setReminderDone] = useState(() => loadJson(REMINDER_DONE_KEY, {}));
-      const [reminderForm, setReminderForm] = useState({ type: "med", title: "", time: "08:00", days: [0, 1, 2, 3, 4, 5, 6], note: "" });
+      const [reminderForm, setReminderForm] = useState({ type: "rehab", title: "", time: "20:00", days: [0, 1, 2, 3, 4, 5, 6], note: "" });
       const [notifyPermission, setNotifyPermission] = useState(() => (typeof Notification === "undefined" ? "unsupported" : Notification.permission));
       const [activeReminder, setActiveReminder] = useState(null);
       const firedRemindersRef = useRef({});
@@ -639,10 +639,20 @@
       }, []);
 
       // 開啟網頁時，若這台裝置之前登入過，就自動恢復登入並帶入資料
+      const [accountRestored, setAccountRestored] = useState(false);
+      const autoChatStartedRef = useRef(false);
       useEffect(() => {
         const token = loadJson(SESSION_STORAGE_KEY, null);
-        if (token) refreshAccount(token);
+        if (token) refreshAccount(token).finally(() => setAccountRestored(true));
+        else setAccountRestored(true);
       }, []);
+
+      // AI 掛號助理是預設入口：帳號恢復完成後自動開啟聊天（聊天畫面底下「回主畫面」仍可使用按鈕式流程）
+      useEffect(() => {
+        if (!accountRestored || autoChatStartedRef.current) return;
+        autoChatStartedRef.current = true;
+        openChat();
+      }, [accountRestored]);
 
       // 登入後帶入個人資料（只補空白欄位，不蓋掉使用者正在修改的內容）
       useEffect(() => {
@@ -687,7 +697,7 @@
             const firedKey = `${r.id}|${dayKey}|${hhmm}`;
             if (firedRemindersRef.current[firedKey]) continue;
             firedRemindersRef.current[firedKey] = true;
-            const label = r.type === "med" ? "用藥時間到了" : "復健時間到了";
+            const label = "復健時間到了";
             setActiveReminder(r);
             speak(`${label}：${r.title}`);
             if (typeof Notification !== "undefined" && Notification.permission === "granted") {
@@ -1331,6 +1341,31 @@
         return [part ? `部位：${part}` : "", mainComplaint || "", ...replies].filter(Boolean).join("。");
       }
 
+      // 本次問診的題目清單：預設是題庫順序，AI 會依回答挑下一題（只能從題庫挑）或提前結束
+      const qaListRef = useRef({ part: "", list: [] });
+      const qaBusyRef = useRef(false);
+      function getQuestions(bp) {
+        const r = qaListRef.current;
+        return r.part === bp && r.list.length ? r.list : (symptomDB[bp]?.questions || []);
+      }
+      function initQaList(part) {
+        qaListRef.current = { part, list: [...(symptomDB[part]?.questions || [])] };
+        qaBusyRef.current = false;
+      }
+      async function fetchNextQuestion(bp, ans, remainingKeys) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 6000);
+          const res = await fetch(`${API_BASE}/api/triage/next-question`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+            body: JSON.stringify({ body_part: bp, answers: Object.fromEntries(Object.entries(ans).map(([k, v]) => [k, String(v)])), remaining_keys: remainingKeys })
+          });
+          clearTimeout(timer);
+          const data = await res.json();
+          return data.status === "success" ? data : null;
+        } catch (e) { return null; } // 連不到就照題庫順序
+      }
+
       async function callRAG(question, metadata = {}) {
         setRagLoading(true); setRagError(""); setRagAnswer(""); setRagChunks([]); setShowRagSources(false); setRagAgreement(null);
         try {
@@ -1354,7 +1389,7 @@
         if (!symptomText) return;
         setExternalHint("");
         if (symptomText === "症狀不明確") {
-          setBodyPart("未明"); setQaStep(0); setAnswers({ mainComplaint: symptomText });
+          setBodyPart("未明"); setQaStep(0); setAnswers({ mainComplaint: symptomText }); initQaList("未明");
           const firstQuestion = symptomDB["未明"].questions[0].q;
           setPrompt(firstQuestion); speak(firstQuestion); setState(STATES.QA);
           return;
@@ -1363,6 +1398,7 @@
         setBodyPart(part); setQaStep(0); setAnswers({ mainComplaint: symptomText });
         const safePart = symptomDB[part] ? part : "未明";
         if (safePart !== part) setBodyPart("未明");
+        initQaList(safePart);
         const firstQuestion = symptomDB[safePart].questions[0].q;
         setPrompt(firstQuestion); speak(firstQuestion); setState(STATES.QA);
       }
@@ -1451,11 +1487,11 @@
         applyDirectDoctorSelection({ department, doctor: null });
       }
 
-      // ---------- 復健／用藥提醒 ----------
+      // ---------- 復健提醒 ----------
       function addReminder(preset) {
         const form = preset || reminderForm;
         const title = (form.title || "").trim();
-        if (!title) { alert(form.type === "med" ? "請輸入藥名，例如：止痛藥 1 顆" : "請輸入復健項目，例如：直膝抬腿 3 組"); return false; }
+        if (!title) { alert("請輸入復健項目，例如：直膝抬腿 3 組"); return false; }
         if (!/^\d{2}:\d{2}$/.test(form.time)) { alert("請選擇提醒時間。"); return false; }
         if (!form.days.length) { alert("請至少選擇一天。"); return false; }
         const item = { id: `r${Date.now()}${Math.random().toString(36).slice(2, 6)}`, type: form.type, title, time: form.time, days: [...form.days].sort(), note: (form.note || "").trim(), enabled: true };
@@ -1505,14 +1541,14 @@
         const blob = new Blob([buildReminderIcs(active)], { type: "text/calendar;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url; a.download = "骨科復健用藥提醒.ics";
+        a.href = url; a.download = "骨科復健提醒.ics";
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
 
       function addRehabReminder(exercise) {
         const ok = addReminder({ type: "rehab", title: exercise.name, time: "20:00", days: [0, 1, 2, 3, 4, 5, 6], note: exercise.reps });
-        if (ok) setToast(`已加入每天 20:00 的復健提醒：${exercise.name}（可到「用藥／復健提醒」分頁修改）`);
+        if (ok) setToast(`已加入每天 20:00 的復健提醒：${exercise.name}（可到「復健提醒」分頁修改）`);
       }
 
       // 背景取得外部 AI（Google Apps Script）的補充建議，全程不 await、不阻塞問診，
@@ -1560,7 +1596,8 @@
         }
 
         if (s === STATES.QA) {
-          const currentQuestion = symptomDB[bp]?.questions?.[step];
+          if (qaBusyRef.current) return; // AI 正在挑下一題，先忽略重複輸入
+          const currentQuestion = getQuestions(bp)[step];
           if (!currentQuestion) return;
           const newAnswers = { ...ans, [currentQuestion.key]: incoming };
           setAnswers(newAnswers);
@@ -1569,23 +1606,44 @@
             setAlertMessage(emergency); setState(STATES.ALERT);
             setPrompt("系統偵測到較危急症狀"); speak("系統偵測到較危急症狀，請盡快就醫"); return;
           }
-          const questions = symptomDB[bp]?.questions || [];
+          const questions = getQuestions(bp);
           if (step + 1 < questions.length) {
-            const nextStep = step + 1; setQaStep(nextStep);
-            const nextQuestion = questions[nextStep].q; setPrompt(nextQuestion); speak(nextQuestion);
+            qaBusyRef.current = true;
+            setPrompt("AI 正在依您的回答，挑選下一個最需要確認的問題…");
+            fetchNextQuestion(bp, newAnswers, questions.slice(step + 1).map((q) => q.key)).then((choice) => {
+              qaBusyRef.current = false;
+              if (choice?.action === "done") {
+                qaListRef.current = { part: bp, list: questions.slice(0, step + 1) }; // 資訊已足夠：提前結束問診
+                finishQa(bp, newAnswers); return;
+              }
+              if (choice?.action === "ask" && choice.key) {
+                const idx = questions.findIndex((q, i) => i > step && q.key === choice.key);
+                if (idx > step + 1) { // 把 AI 挑的題目移到下一題（只調整順序，題目文字一律用題庫原文）
+                  const list = [...questions]; const [picked] = list.splice(idx, 1); list.splice(step + 1, 0, picked);
+                  qaListRef.current = { part: bp, list };
+                }
+              }
+              const nextQuestion = getQuestions(bp)[step + 1];
+              setQaStep(step + 1); setPrompt(nextQuestion.q); speak(nextQuestion.q);
+            });
           } else {
-            const calculated = calculate(bp, newAnswers);
-            const topDept = calculated[0][0];
-            setResult(calculated);
-            setPreferredDoctor(null); // 交給後端在負責這個問題類型的醫師裡找最快的時段
-            callRAG(buildRagQuestion(bp, newAnswers), { body_part: bp, recommended_department: topDept });
-            if (REFERRAL_CATEGORIES[topDept]) {
-              // 小診所處理不了的問題（疑似腫瘤、需高壓氧）：先建議轉診，病人仍可選擇先讓診所醫師評估
-              setPrompt("建議轉診至醫院進一步評估"); speak("您的狀況建議轉診至醫院進一步評估"); setState(STATES.REFERRAL);
-            } else {
-              setPrompt("已完成初步分流分析，正在為您查詢最快的門診時段..."); speak("已完成初步分流分析"); setState(STATES.RESULT);
-            }
+            finishQa(bp, newAnswers);
           }
+        }
+      }
+
+      // 問診結束：算分流、查 RAG、進入推薦畫面
+      function finishQa(bp, newAnswers) {
+        const calculated = calculate(bp, newAnswers);
+        const topDept = calculated[0][0];
+        setResult(calculated);
+        setPreferredDoctor(null); // 交給後端在負責這個問題類型的醫師裡找最快的時段
+        callRAG(buildRagQuestion(bp, newAnswers), { body_part: bp, recommended_department: topDept });
+        if (REFERRAL_CATEGORIES[topDept]) {
+          // 小診所處理不了的問題（疑似腫瘤、需高壓氧）：先建議轉診，病人仍可選擇先讓診所醫師評估
+          setPrompt("建議轉診至醫院進一步評估"); speak("您的狀況建議轉診至醫院進一步評估"); setState(STATES.REFERRAL);
+        } else {
+          setPrompt("已完成初步分流分析，正在為您查詢最快的門診時段..."); speak("已完成初步分流分析"); setState(STATES.RESULT);
         }
       }
 
@@ -1598,7 +1656,7 @@
       // 問診中點擊「上一步」的處理邏輯
       function goBackQa() {
         const { bodyPart: bp, qaStep: step, answers: ans } = latestRef.current;
-        const questions = symptomDB[bp]?.questions || [];
+        const questions = getQuestions(bp);
         const msg = "請選擇不舒服的骨骼關節部位，或直接描述症狀";
 
         // 如果已經是第一題，再按上一步就退回到「選擇部位」頁面
@@ -1631,7 +1689,7 @@
       }
 
       function renderQaProgress() {
-        const questions = symptomDB[bodyPart]?.questions || [];
+        const questions = getQuestions(bodyPart);
         if (!questions.length) return null;
         const total = questions.length; const current = Math.min(qaStep + 1, total); const pct = Math.round((current / total) * 100);
         return (
@@ -1650,7 +1708,7 @@
         if (state !== STATES.QA || !account?.lastTriage) return null;
         const last = account.lastTriage;
         if (last.body_part !== bodyPart) return null;
-        const currentQ = (symptomDB[bodyPart]?.questions || [])[qaStep];
+        const currentQ = getQuestions(bodyPart)[qaStep];
         const prev = currentQ ? (last.qa_answers || {})[currentQ.key] : null;
         if (!prev) return null;
         return (
@@ -1663,7 +1721,7 @@
 
       function renderQuickOptions() {
         if (state !== STATES.QA) return null;
-        const questions = symptomDB[bodyPart]?.questions || [];
+        const questions = getQuestions(bodyPart);
         const currentQ = questions[qaStep];
         if (!currentQ) return null;
         // 快捷選項：優先用診所設定的選項；舊資料沒有選項時，「持續多久」維持原本的預設選項
@@ -2338,7 +2396,7 @@
             <button type="button" role="tab" aria-selected={state === STATES.REHAB} className={`care-tab ${state === STATES.REHAB ? "active" : ""}`}
               onClick={() => { if (state !== STATES.REHAB) goToFeature(STATES.REHAB, "看診後照護：居家復健動作教學"); }}>🎬 復健影片</button>
             <button type="button" role="tab" aria-selected={state === STATES.REMINDERS} className={`care-tab ${state === STATES.REMINDERS ? "active" : ""}`}
-              onClick={() => { if (state !== STATES.REMINDERS) goToFeature(STATES.REMINDERS, "看診後照護：復健與用藥提醒"); }}>⏰ 用藥／復健提醒</button>
+              onClick={() => { if (state !== STATES.REMINDERS) goToFeature(STATES.REMINDERS, "看診後照護：復健提醒"); }}>⏰ 復健提醒</button>
           </div>
         );
       }
@@ -2366,7 +2424,7 @@
                   <label key={r.id} className={`reminder-today ${done ? "done" : ""}`}>
                     <input type="checkbox" checked={done} onChange={() => toggleReminderDone(r.id)} />
                     <span className="reminder-time">{r.time}</span>
-                    <span>{r.type === "med" ? "💊" : "🏃"} {r.title}</span>
+                    <span>🏃 {r.title}</span>
                   </label>
                 );
               })}
@@ -2374,13 +2432,9 @@
 
             <div className="reminder-section">
               <h4>新增提醒</h4>
-              <div className="reminder-type-row">
-                <button type="button" className={`chip ${reminderForm.type === "med" ? "active" : ""}`} onClick={() => setReminderForm((f) => ({ ...f, type: "med" }))}>💊 用藥</button>
-                <button type="button" className={`chip ${reminderForm.type === "rehab" ? "active" : ""}`} onClick={() => setReminderForm((f) => ({ ...f, type: "rehab" }))}>🏃 復健</button>
-              </div>
-              <label className="field-label">{reminderForm.type === "med" ? "藥名／劑量" : "復健項目"}</label>
+              <label className="field-label">復健項目</label>
               <input className="text-input" value={reminderForm.title} onChange={(e) => setReminderForm((f) => ({ ...f, title: e.target.value }))}
-                placeholder={reminderForm.type === "med" ? "例如：消炎止痛藥 1 顆（飯後）" : "例如：直膝抬腿 10 下 × 3 組"} />
+                placeholder="例如：直膝抬腿 10 下 × 3 組" />
               <label className="field-label">提醒時間</label>
               <input className="text-input" type="time" value={reminderForm.time} onChange={(e) => setReminderForm((f) => ({ ...f, time: e.target.value }))} />
               <label className="field-label">重複（星期）</label>
@@ -2390,7 +2444,7 @@
                 ))}
               </div>
               <label className="field-label">備註（選填）</label>
-              <input className="text-input" value={reminderForm.note} onChange={(e) => setReminderForm((f) => ({ ...f, note: e.target.value }))} placeholder="例如：配溫開水、運動前先熱敷" />
+              <input className="text-input" value={reminderForm.note} onChange={(e) => setReminderForm((f) => ({ ...f, note: e.target.value }))} placeholder="例如：運動前先熱敷" />
               <button type="button" className="btn" onClick={() => { if (addReminder()) setToast("已新增提醒"); }}>＋ 新增提醒</button>
             </div>
 
@@ -2401,7 +2455,7 @@
               ) : reminders.map((r) => (
                 <div key={r.id} className={`reminder-item ${r.enabled ? "" : "off"}`}>
                   <div>
-                    <div className="reminder-item-title">{r.type === "med" ? "💊" : "🏃"} {r.title}</div>
+                    <div className="reminder-item-title">🏃 {r.title}</div>
                     <div className="reminder-item-meta">
                       {r.time}．{r.days.length === 7 ? "每天" : `每週${r.days.map((d) => WEEKDAY_SHORT[d]).join("、")}`}{r.note ? `．${r.note}` : ""}
                     </div>
@@ -2638,7 +2692,7 @@
               </div>
               <div className="care-link-row">
                 <button type="button" className="care-link" onClick={() => goToFeature(STATES.REHAB, "看診後照護：居家復健動作教學")}>
-                  🏃 看診後照護<span className="care-link-desc">復健影片・用藥提醒</span><span aria-hidden="true">›</span>
+                  🏃 看診後照護<span className="care-link-desc">復健影片・復健提醒</span><span aria-hidden="true">›</span>
                 </button>
                 {ENABLE_XRAY ? (
                   <button type="button" className="care-link" onClick={() => goToFeature(STATES.XRAY, "請上傳或拍攝 X 光片")}>
@@ -2929,7 +2983,7 @@
           {activeReminder ? (
             <div className="reminder-alert" role="alert">
               <div>
-                <strong>{activeReminder.type === "med" ? "💊 用藥時間到了" : "🏃 復健時間到了"}</strong>
+                <strong>🏃 復健時間到了</strong>
                 <div>{activeReminder.title}{activeReminder.note ? `（${activeReminder.note}）` : ""}</div>
               </div>
               <div className="reminder-alert-actions">
