@@ -2,7 +2,7 @@
 
 範圍由程式限制：
   - GPT 只能從尚未問過的題庫題目中選（用題目 key），不能自己編題目。
-  - 至少問滿 MIN_ASKED 題才可以提前結束；沒有可用的知識片段也不能提前結束。
+  - 至少問滿 MIN_ASKED 題才可以提前結束；問到 MAX_ASKED 題一律結束；沒有可用的知識片段也不能提前結束。
   - 挑題時會參考 RAG 檢索到的知識片段，但題目文字一律用題庫原文。
   - 沒有金鑰、呼叫失敗或回傳不合格，就照題庫原本的順序問下一題。
 急症判斷不在這裡（前端每答一題都會先跑問診規則）。
@@ -12,7 +12,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
-MIN_ASKED = 3          # 至少回答幾題（不含主訴）才可提前結束
+MIN_ASKED = 2          # 至少回答幾題（不含主訴）才可提前結束
+MAX_ASKED = 4          # 最多問幾題（診所希望 2～4 題就判斷掛號醫師）
 MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.05"))
 
 SYSTEM = """你是骨科診所的問診助理，使用繁體中文。
@@ -29,11 +30,13 @@ def default_choice(remaining: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def choose_next(part: str, answers: Dict[str, str], remaining: List[Dict[str, Any]],
                 chunks: List[Dict[str, Any]], client: Any = None) -> Dict[str, Any]:
+    asked = sum(1 for k, v in answers.items() if k != "mainComplaint" and str(v).strip())
+    if asked >= MAX_ASKED:
+        return {"action": "done", "key": None, "reason": "", "source": "default"}
     fallback = default_choice(remaining)
     if not remaining or not (client or os.getenv("OPENAI_API_KEY")):
         return fallback
     usable = [c for c in chunks if (c.get("score") or 0) >= MIN_SCORE and c.get("content")]
-    asked = sum(1 for k, v in answers.items() if k != "mainComplaint" and str(v).strip())
     try:
         if client is None:
             from openai import OpenAI

@@ -371,10 +371,13 @@ def _start(state, msg, tools, today):
                  ["我肩膀痛", "查詢我的掛號", "重新開始"])
 
 
+MAX_QA = 4  # 問診最多問幾題（診所希望 2～4 題就判斷掛號醫師）
+
+
 def _begin_qa(state, msg, tools):
     part = detect_part(msg) or "未明"
     state.update({"step": "qa", "part": part, "answers": {"mainComplaint": msg}, "q_index": 0})
-    questions = tools.questions(part)
+    questions = tools.questions(part)[:MAX_QA]
     if not questions:
         return _finish_qa(state, tools)
     q = questions[0]
@@ -389,7 +392,7 @@ def _non_ortho(state, msg, tools, today):
 
 
 def _qa(state, msg, tools, today):
-    questions = tools.questions(state["part"])
+    questions = tools.questions(state["part"])[:MAX_QA]
     idx = state["q_index"]
     if idx < len(questions):
         state["answers"][questions[idx]["key"]] = "（略過）" if "跳過" in msg else msg

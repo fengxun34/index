@@ -1341,6 +1341,7 @@
         return [part ? `部位：${part}` : "", mainComplaint || "", ...replies].filter(Boolean).join("。");
       }
 
+      const MAX_QA_QUESTIONS = 4; // 問診最多問 4 題（AI 判斷資訊足夠時 2～3 題就結束）
       // 本次問診的題目清單：預設是題庫順序，AI 會依回答挑下一題（只能從題庫挑）或提前結束
       const qaListRef = useRef({ part: "", list: [] });
       const qaBusyRef = useRef(false);
@@ -1377,6 +1378,13 @@
           setRagAnswer(data.answer || "");
           setRagChunks(Array.isArray(data.retrieved_chunks) ? data.retrieved_chunks : []);
           setRagAgreement(data.agreement || null);
+          // GPT 的判斷（候選類型只來自 RAG 檢索結果）與規則不同時：以它為準重新推薦醫師；轉診類別一律維持規則結果
+          const llm = data.llm_triage;
+          if (llm?.department && llm.department !== metadata.recommended_department
+              && !REFERRAL_CATEGORIES[llm.department] && !REFERRAL_CATEGORIES[metadata.recommended_department]
+              && latestRef.current.state === STATES.RESULT) {
+            setResult((prev) => [[llm.department, 80], ...prev.filter((r) => r[0] !== llm.department)].slice(0, 3));
+          }
         } catch (err) {
           console.error("RAG 錯誤：", err);
           setRagError("RAG 連線失敗，請確認本機後端是否啟動。");
@@ -1607,7 +1615,7 @@
             setPrompt("系統偵測到較危急症狀"); speak("系統偵測到較危急症狀，請盡快就醫"); return;
           }
           const questions = getQuestions(bp);
-          if (step + 1 < questions.length) {
+          if (step + 1 < Math.min(questions.length, MAX_QA_QUESTIONS)) {
             qaBusyRef.current = true;
             setPrompt("AI 正在依您的回答，挑選下一個最需要確認的問題…");
             fetchNextQuestion(bp, newAnswers, questions.slice(step + 1).map((q) => q.key)).then((choice) => {
@@ -1691,7 +1699,7 @@
       function renderQaProgress() {
         const questions = getQuestions(bodyPart);
         if (!questions.length) return null;
-        const total = questions.length; const current = Math.min(qaStep + 1, total); const pct = Math.round((current / total) * 100);
+        const total = Math.min(questions.length, MAX_QA_QUESTIONS); const current = Math.min(qaStep + 1, total); const pct = Math.round((current / total) * 100);
         return (
           <div className="qa-topbar">
             <div className="qa-meta">
