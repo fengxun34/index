@@ -1413,6 +1413,7 @@ def admin_clinic_page(admin_username: str = Depends(verify_admin)):
 # ===== 聊天式掛號助理（規則版代理人，邏輯在 agent.py）=====
 # 代理人的「工具」直接沿用既有的後端功能，身分驗證、防超賣、班表檢查都照常把關。
 import agent as chat_agent
+import agent_llm
 from pydantic import ValidationError
 
 
@@ -1452,7 +1453,15 @@ def agent_chat(req: AgentChatRequest, authorization: Optional[str] = Header(defa
     if authorization and supabase is not None:
         patient = patient_from_token(authorization)
         profile = account_profile(patient) if patient else None
-    return chat_agent.handle_turn(req.state, req.message, AGENT_TOOLS, profile=profile)
+    # 有設定 OPENAI_API_KEY 就用 LLM 版；沒設定或呼叫失敗時退回規則版（兩種版本的對話狀態不通用，切換時重新開始）
+    if agent_llm.llm_enabled():
+        state = req.state if (req.state or {}).get("mode") == "llm" else None
+        try:
+            return agent_llm.handle_turn_llm(state, req.message, AGENT_TOOLS, profile=profile)
+        except Exception:
+            traceback.print_exc()
+    state = None if (req.state or {}).get("mode") == "llm" else req.state
+    return chat_agent.handle_turn(state, req.message, AGENT_TOOLS, profile=profile)
 
 
 # 管理者專用，帶有網頁介面的掛號總覽 API（需登入）
