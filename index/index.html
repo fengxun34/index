@@ -548,6 +548,7 @@
       const [deptScheduleError, setDeptScheduleError] = useState("");
       const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
 
+      const [editPatientInfo, setEditPatientInfo] = useState(false); // 已登入且資料完整時，預設不再詢問基本資料，要改才展開
       const [recordingPatientInfo, setRecordingPatientInfo] = useState(false);
       const [patientVoiceNeedsReview, setPatientVoiceNeedsReview] = useState(false);
       const [lastPatientVoiceTranscript, setLastPatientVoiceTranscript] = useState("");
@@ -1397,7 +1398,7 @@
         setPreferredDoctor(null); setAiAssignLoading(false); setAiAssignError("");
         setShowBookingEdit(false); setEditDept(""); setDeptSchedule(null);
         setDeptScheduleLoading(false); setDeptScheduleError(""); setIsSubmittingBooking(false);
-        setRecordingPatientInfo(false); setPatientVoiceNeedsReview(false);
+        setRecordingPatientInfo(false); setEditPatientInfo(false); setPatientVoiceNeedsReview(false);
         setLastPatientVoiceTranscript(""); setRagLoading(false); setRagError("");
         setRagAnswer(""); setRagChunks([]); setChatHistory([]); setExternalHint("");
         setSearchId(""); setHistoryList(null);
@@ -2805,14 +2806,20 @@
         }
 
         if (state === STATES.PATIENT_INFO) {
+          const infoComplete = !!(account?.profile && patientInfo.name && patientInfo.idNumber && patientInfo.birth && patientInfo.phone);
+          const showInfoFields = !infoComplete || editPatientInfo;
           return (
             <div className="form-card">
-              <h3>{account?.profile ? "確認基本資料，AI 幫您完成剩下的事" : "填寫基本資料，AI 幫您完成剩下的事"}</h3>
-              {account?.profile ? (
+              <h3>{infoComplete ? "確認掛號內容" : "填寫基本資料，AI 幫您完成剩下的事"}</h3>
+              {infoComplete && !editPatientInfo ? (
+                <p className="account-note">✅ 已使用 {account.profile.name} 的帳號資料（手機 {patientInfo.phone}），不需要重新填寫。
+                  <button type="button" className="account-link inline" onClick={() => setEditPatientInfo(true)}>資料有誤？修改</button></p>
+              ) : account?.profile ? (
                 <p className="account-note">✅ 已帶入 {account.profile.name} 的帳號資料，有變更可以直接修改。</p>
               ) : (
                 <p className="account-note">已經有帳號？<button type="button" className="account-link inline" onClick={() => openAccount("login")}>登入</button>就不用填寫。</p>
               )}
+              {showInfoFields ? (<>
               <div className="patient-info-mic">
                 <p className="patient-voice-hint">可直接用語音一次說出姓名、身分證字號、生日與手機號碼，AI 會自動幫您填入欄位。</p>
                 <button type="button" className={`mic-btn ${recordingPatientInfo ? "recording" : ""}`} onClick={recordingPatientInfo ? stopPatientInfoRecord : startPatientInfoRecord}>{recordingPatientInfo ? "停止語音輸入" : "語音填寫資料"}</button>
@@ -2832,6 +2839,7 @@
               <input className="text-input" name="birth" value={patientInfo.birth} onChange={handlePatientInfoChange} placeholder="YYYY/MM/DD" />
               <label className="field-label">手機</label>
               <input className="text-input" name="phone" value={patientInfo.phone} onChange={handlePatientInfoChange} />
+              </>) : null}
 
               {renderBookingSummary()}
 

@@ -20,6 +20,26 @@
     "一週",
     "大於一週"
    ]
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
+   "options": []
+  },
+  {
+   "key": "numb",
+   "question": "手指有沒有麻木、握力變差，或拿東西容易掉？",
+   "options": []
   }
  ],
  "腰椎": [
@@ -43,6 +63,26 @@
     "一週",
     "大於一週"
    ]
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
+   "options": []
+  },
+  {
+   "key": "posture",
+   "question": "彎腰、久坐或咳嗽時會更痛嗎？腿有沒有無力的感覺？",
+   "options": []
   }
  ],
  "兒童": [
@@ -66,6 +106,26 @@
     "一週",
     "大於一週"
    ]
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
+   "options": []
+  },
+  {
+   "key": "childActivity",
+   "question": "孩子最近有沒有跛行、不願意走路或活動，有受過傷嗎？",
+   "options": []
   }
  ],
  "腫瘤": [
@@ -89,6 +149,16 @@
     "一週",
     "大於一週"
    ]
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
+   "options": []
   }
  ],
  "高壓氧": [
@@ -107,6 +177,11 @@
     "一週",
     "大於一週"
    ]
+  },
+  {
+   "key": "hboHistory",
+   "question": "有醫師建議做高壓氧嗎？目前有沒有慢性傷口、糖尿病或放射治療的病史？",
+   "options": []
   }
  ],
  "肩關節": [
@@ -130,6 +205,26 @@
     "一週",
     "大於一週"
    ]
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
+   "options": []
+  },
+  {
+   "key": "motion",
+   "question": "手舉高或往後伸會痛嗎？睡覺壓到那一側會痛嗎？",
+   "options": []
   }
  ],
  "肘腕": [
@@ -146,6 +241,26 @@
   {
    "key": "numb",
    "question": "是否有手指麻木或無力的情形？",
+   "options": []
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
+   "options": []
+  },
+  {
+   "key": "grip",
+   "question": "手腕或手肘有沒有麻木、握力下降，或做某個動作特別痛？",
    "options": []
   }
  ],
@@ -170,6 +285,21 @@
     "一週",
     "大於一週"
    ]
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
+   "options": []
   }
  ],
  "膝關節": [
@@ -186,6 +316,21 @@
   {
    "key": "swelling",
    "question": "是否有明顯腫脹、發熱，或無法完全伸直彎曲？",
+   "options": []
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "locking",
+   "question": "膝蓋有沒有卡住、鬆脫感，或無法完全伸直、彎曲？",
    "options": []
   }
  ],
@@ -204,6 +349,16 @@
    "key": "swelling",
    "question": "是否有腫脹、瘀青，或明顯變形？",
    "options": []
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
   }
  ],
  "外傷": [
@@ -220,6 +375,16 @@
   {
    "key": "openWound",
    "question": "是否有傷口出血，或骨頭外露的情形？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
    "options": []
   }
  ],
@@ -243,6 +408,26 @@
   {
    "key": "severity",
    "question": "症狀是否已經影響日常生活或工作？",
+   "options": []
+  },
+  {
+   "key": "onset",
+   "question": "是怎麼開始的？例如受傷、運動、搬重物，還是慢慢出現的？",
+   "options": []
+  },
+  {
+   "key": "trigger",
+   "question": "什麼動作會讓疼痛加重？休息或什麼方式會比較緩解？",
+   "options": []
+  },
+  {
+   "key": "swelling",
+   "question": "有沒有腫脹、發熱、瘀青或變形？晚上或休息時會痛醒嗎？",
+   "options": []
+  },
+  {
+   "key": "location",
+   "question": "最不舒服的位置在哪裡？有沒有範圍越來越大？",
    "options": []
   }
  ]
