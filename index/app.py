@@ -148,6 +148,7 @@ class AnswerRequest(BaseModel):
     question: str
     top_k: Optional[int] = 3
     metadata: Optional[Dict[str, Any]] = None
+    explain: Optional[bool] = True  # 是否加上 GPT 白話說明（聊天助理自己會整理，會關掉）
 
 class BookingRequest(BaseModel):
     name: str
@@ -477,6 +478,18 @@ def _extract_advice(content: str) -> str:
 
 @app.post("/rag/answer")
 def rag_answer(req: AnswerRequest):
+    """檢索（TF-IDF）＋生成（GPT 整理成白話，且受 rag_generate 的範圍檢查限制）；生成失敗就只回檢索結果。"""
+    result = _rag_retrieve(req)
+    if req.explain and result.get("retrieved_chunks"):
+        text = rag_generate.explain(req.question, result["retrieved_chunks"],
+                                    category_label(req.metadata.get("recommended_department")) if (req.metadata or {}).get("recommended_department") in ALLOWED_DEPARTMENTS else None)
+        if text:
+            result["answer"] += "\n白話說明：" + text
+            result["generated"] = True
+    return result
+
+
+def _rag_retrieve(req: AnswerRequest):
     if vectorizer is None:
         rebuild_rag_index()
     if vectorizer is None:
@@ -1440,6 +1453,7 @@ def admin_clinic_page(admin_username: str = Depends(verify_admin)):
 # 代理人的「工具」直接沿用既有的後端功能，身分驗證、防超賣、班表檢查都照常把關。
 import agent as chat_agent
 import agent_llm
+import rag_generate
 from pydantic import ValidationError
 
 
@@ -1460,7 +1474,7 @@ AGENT_TOOLS = chat_agent.AgentTools(
     reschedule=lambda id_number, birth, no, new_slot, new_doctor: _call_tool(
         reschedule_booking, RescheduleRequest, id_number=id_number, birth_date=birth, appointment_no=no,
         new_slot=new_slot, new_doctor=new_doctor),
-    rag=lambda question, metadata: rag_answer(AnswerRequest(question=question, top_k=3, metadata=metadata)),
+    rag=lambda question, metadata: rag_answer(AnswerRequest(question=question, top_k=3, metadata=metadata, explain=False)),
     doctors=DOCTORS,
     category_labels=CATEGORY_LABELS,
     referral_categories=REFERRAL_CATEGORIES,
