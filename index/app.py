@@ -148,7 +148,7 @@ class AnswerRequest(BaseModel):
     question: str
     top_k: Optional[int] = 3
     metadata: Optional[Dict[str, Any]] = None
-    explain: Optional[bool] = True  # 是否加上 GPT 白話說明（聊天助理自己會整理，會關掉）
+    explain: Optional[bool] = True  # 是否加上 GPT 判斷（聊天助理自己會判斷，會關掉）
 
 class BookingRequest(BaseModel):
     name: str
@@ -478,14 +478,18 @@ def _extract_advice(content: str) -> str:
 
 @app.post("/rag/answer")
 def rag_answer(req: AnswerRequest):
-    """檢索（TF-IDF）＋生成（GPT 整理成白話，且受 rag_generate 的範圍檢查限制）；生成失敗就只回檢索結果。"""
+    """檢索（TF-IDF）＋GPT 判斷（候選類型只來自檢索結果、理由經程式檢查）；GPT 不合格就只回原本的結果。"""
     result = _rag_retrieve(req)
     if req.explain and result.get("retrieved_chunks"):
-        text = rag_generate.explain(req.question, result["retrieved_chunks"],
-                                    category_label(req.metadata.get("recommended_department")) if (req.metadata or {}).get("recommended_department") in ALLOWED_DEPARTMENTS else None)
-        if text:
-            result["answer"] += "\n白話說明：" + text
-            result["generated"] = True
+        rule_dept = (req.metadata or {}).get("recommended_department")
+        rule_dept = rule_dept if rule_dept in ALLOWED_DEPARTMENTS else None
+        verdict = rag_generate.judge(req.question, result["retrieved_chunks"], rule_dept, category_label)
+        if verdict:
+            note = "AI 綜合判斷（僅限知識庫範圍）：較可能是【%s】。%s" % (verdict["label"], verdict["reason"])
+            if rule_dept and not verdict["agrees_with_rule"]:
+                note += "\n問診規則判斷為【%s】，兩者不同時請以醫師評估為準。" % category_label(rule_dept)
+            result["answer"] += "\n" + note
+            result["llm_triage"] = {k: verdict[k] for k in ("department", "label", "agrees_with_rule")}
     return result
 
 
