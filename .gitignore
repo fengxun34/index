@@ -1,0 +1,9 @@
+# 金鑰與密碼：絕對不要放上 GitHub
+.env
+*.env
+!.env.example
+
+__pycache__/
+*.pyc
+venv/
+.venv/

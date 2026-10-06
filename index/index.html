@@ -905,11 +905,13 @@
         }
         setIsSearching(true);
         try {
-          const response = await fetch(`${API_BASE}/api/booking/history`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id_number: idNumber, birth_date: birth })
-          });
+          const response = account?.token
+            ? await fetch(`${API_BASE}/api/account/me`, { headers: { Authorization: `Bearer ${account.token}` } })
+            : await fetch(`${API_BASE}/api/booking/history`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id_number: idNumber, birth_date: birth })
+              });
           const data = await response.json();
           if (data.status === "success") {
             setHistoryList(data.data);
@@ -959,6 +961,9 @@
       }
 
       function applyLogin(data, message) {
+        setHistoryList(null); setLastVisit(null); setRescheduleTarget(null);
+        setAnswers({}); setBodyPart(""); setQaStep(0);
+        setChatMessages([]); setChatState(null); setChatQuick([]); setChatInput("");
         saveJson(SESSION_STORAGE_KEY, data.token);
         setAccount({ token: data.token, profile: data.profile, lastTriage: null, lastVisit: null });
         setPatientInfo(profileToPatientInfo(data.profile));
@@ -970,9 +975,26 @@
         setPrompt(`歡迎，${data.profile.name}！${INITIAL_PROMPT}`);
       }
 
+      async function manageLine(unlink = false) {
+        if (!account?.token) { openAccount("login"); return; }
+        if (unlink && !window.confirm("確定解除 LINE 通知綁定？")) return;
+        try {
+          const res = await fetch(`${API_BASE}/api/line/${unlink ? "link" : "link-code"}`, {
+            method: unlink ? "DELETE" : "POST", headers: { Authorization: `Bearer ${account.token}` }
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || data.message || "操作失敗");
+          if (unlink) { alert("已解除 LINE 綁定"); return; }
+          window.prompt("請加診所 LINE 好友，將下方文字傳送給診所（10 分鐘內有效）。綁定代表同意接收掛號資訊與預約前一天提醒。" + (data.friend_url ? "\n加好友網址：" + data.friend_url : ""), "綁定 " + data.code);
+        } catch (e) { alert(e.message); }
+      }
+
       function logout(withMessage = true) {
         try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch (e) { /* 無痕模式等情況略過 */ }
         setAccount(null);
+        setAnswers({}); setBodyPart(""); setQaStep(0);
+        setChatMessages([]); setChatState(null); setChatQuick([]); setChatInput("");
+        setRescheduleTarget(null);
         setPatientInfo(profileToPatientInfo(null));
         setSearchId(""); setSearchBirth(""); setHistoryList(null); setLastVisit(null);
         if (withMessage) { setToast("已登出"); speak("已登出"); }
@@ -2140,6 +2162,18 @@
                             問題類型：{item.category_label || categoryLabel(item.department)}
                             {item.main_complaint ? `｜主訴：${item.main_complaint}` : ''}
                           </p>
+                          {Object.keys(item.qa_answers || {}).length > 0 ? (
+                            <details style={{ margin: '10px 0' }}>
+                              <summary>查看當次問診問答</summary>
+                              {Object.entries(item.qa_answers).map(([key, value]) => (
+                                <p key={key}>
+                                  <strong>{key === "mainComplaint" ? "主訴" : (symptomDB[item.body_part]?.questions || []).find(q => q.key === key)?.q || key}：</strong>
+                                  {typeof value === "object" ? JSON.stringify(value) : String(value)}
+                                </p>
+                              ))}
+                              {item.ai_suggestion ? <p>當次 AI 建議：{String(item.ai_suggestion)}</p> : null}
+                            </details>
+                          ) : null}
                           <p style={{ margin: '0', fontSize: '12px', color: '#888' }}>預約者：{item.name} | 預約建立於：{item.created_at}</p>
 
                           {!isCancelled && !isPast ? (
@@ -2868,6 +2902,8 @@
             {account?.profile ? (
               <>
                 <span className="account-name">👤 {account.profile.name}</span>
+                <button type="button" className="account-link" onClick={() => manageLine()}>綁定 LINE 通知</button>
+                <button type="button" className="account-link" onClick={() => manageLine(true)}>解除 LINE 綁定</button>
                 <button type="button" className="account-link" onClick={() => { resetAll(); logout(); }}>登出</button>
               </>
             ) : (

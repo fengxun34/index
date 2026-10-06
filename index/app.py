@@ -25,7 +25,6 @@ from supabase import create_client, Client
 from postgrest.exceptions import APIError
 from fastapi import Header
 from set_admin_password import hash_password
-
 load_dotenv()
 
 app = FastAPI()
@@ -298,6 +297,12 @@ def is_session_bookable_now(date_obj, session: str, now: datetime) -> bool:
         return True
     start_hour = SESSION_START_HOUR.get(session, 0)
     return now.hour < start_hour
+
+
+def slot_is_past(date_obj, session: str, now: Optional[datetime] = None) -> bool:
+    """過去的日期、或今天已經開始看診的時段，後端一律不收（不能只靠前端不顯示）。"""
+    now = now or datetime.now()
+    return date_obj < now.date() or not is_session_bookable_now(date_obj, session, now)
 
 
 def get_capacity_map(doctors: list, date_from, date_to) -> dict:
@@ -704,6 +709,8 @@ def confirm_booking(req: BookingRequest):
     session = SESSION_BY_TIME_SLOT.get(time_slot)
     if session is None or session not in get_doctor_sessions(req.doctor, appt_date_obj):
         return {"status": "error", "message": f"驗證失敗：{req.doctor} 在 {appointment_date} 沒有看診！"}
+    if slot_is_past(appt_date_obj, session):
+        return {"status": "error", "message": "這個時段已經過了或已開始看診，請選擇其他時段。"}
 
     try:
         id_number = req.id_number.upper()
@@ -730,6 +737,15 @@ def confirm_booking(req: BookingRequest):
             on_conflict="id_number"
         ).execute()
         patient_id = patient_res.data[0]["id"]
+
+        # 同一個人同一天同一時段不能重複掛號（不論醫師）
+        duplicate = (
+            supabase.table("appointments").select("id", count="exact")
+            .eq("patient_id", patient_id).eq("appointment_date", appointment_date)
+            .eq("time_slot", time_slot).eq("status", "confirmed").execute()
+        )
+        if (duplicate.count or 0) > 0:
+            return {"status": "error", "message": f"您在 {appointment_date} {time_slot} 已經有掛號了，請選擇其他時段或到「查詢掛號」修改。"}
 
         # 用資料庫端的原子操作（advisory lock）檢查容額並新增掛號，避免高併發下
         # 「先查詢再新增」這兩步不同交易，導致容額上限被打破（見 sql/003_atomic_slot_capacity.sql）
@@ -807,6 +823,7 @@ def build_patient_history(patient: dict) -> dict:
             "body_part": triage.get("body_part"),
             "main_complaint": triage.get("main_complaint"),
             "ai_suggestion": triage.get("ai_suggestion"),
+            "qa_answers": triage.get("qa_answers") or {},
         })
 
     # 上次就診：看診日期已經過去、且沒有取消的掛號裡，日期最近的一筆
@@ -890,7 +907,7 @@ def reschedule_booking(req: RescheduleRequest):
 
         appt_res = (
             supabase.table("appointments")
-            .select("id, status, doctor, department")
+            .select("id, patient_id, status, doctor, department")
             .eq("patient_id", patient_id)
             .eq("appointment_no", req.appointment_no)
             .execute()
@@ -920,6 +937,15 @@ def reschedule_booking(req: RescheduleRequest):
         new_session = SESSION_BY_TIME_SLOT.get(new_time_slot)
         if new_session is None or new_session not in get_doctor_sessions(doctor, new_date_obj):
             return {"status": "error", "message": f"驗證失敗：{doctor} 在該時段沒有看診！"}
+        if slot_is_past(new_date_obj, new_session):
+            return {"status": "error", "message": "這個時段已經過了或已開始看診，請選擇其他時段。"}
+        same_time = (
+            supabase.table("appointments").select("id", count="exact")
+            .eq("patient_id", appt["patient_id"]).eq("appointment_date", new_date)
+            .eq("time_slot", new_time_slot).eq("status", "confirmed").neq("id", appt["id"]).execute()
+        )
+        if (same_time.count or 0) > 0:
+            return {"status": "error", "message": f"您在 {new_date} {new_time_slot} 已經有其他掛號了。"}
 
         existing = (
             supabase.table("appointments")
@@ -1620,3 +1646,7 @@ def get_all_bookings(admin_username: str = Depends(verify_admin)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
+
+# LINE 通知模組（未設定 LINE 時不影響既有掛號）
+import line_bot
+line_bot.install(app, lambda: supabase, patient_from_token)
