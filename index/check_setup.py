@@ -39,7 +39,7 @@ def section(title):
 
 def main():
     print("=" * 56)
-    print(" 骨科智慧語音掛號助理：環境檢查")
+    print(" 醫語搞定-AI智慧語音掛號助理：環境檢查")
     print("=" * 56)
 
     # 1. Python
