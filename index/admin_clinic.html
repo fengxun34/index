@@ -45,9 +45,11 @@
     .kb-item .meta { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
     .kb-item p { margin: 4px 0; font-size: 14.5px; line-height: 1.6; }
     .hidden { display: none; }
+      .kb-item { overflow-wrap:anywhere; }
   </style>
 </head>
 <body>
+  <p style="margin:16px;padding:12px;background:#fff7ed">全骨科示範草稿，待醫師確認。12 種流程、60 筆附來源知識；必要篩檢題固定保留，依回答追問。此頁可管理診所自訂內容。</p>
   <div class="container">
     <nav class="admin-nav">
       <a href="/api/admin/all_bookings">📋 掛號總覽</a>
@@ -66,6 +68,7 @@
       <label>部位</label>
       <select id="part"></select>
       <div id="part-badge" style="margin-top:8px"></div>
+      <div id="q-flow" class="meta"></div>
       <div id="q-list"></div>
       <div class="actions">
         <button type="button" class="btn ghost" id="q-add">＋ 新增一題</button>
@@ -96,6 +99,8 @@
         <button type="button" class="btn ghost" id="k-clear">清空表單（新增下一筆）</button>
       </div>
       <div class="status" id="k-status"></div>
+      <label>示範知識部位</label><select id="demo-filter"><option value="">全部部位</option></select>
+      <div class="kb-list" id="demo-k-list"></div>
       <div class="kb-list" id="k-list"></div>
     </div>
   </div>
@@ -130,6 +135,8 @@
         kDept.add(new Option("不限", ""));
         Object.entries(data.categories).forEach(([code, label]) => kDept.add(new Option(label, code)));
       }
+      const df = document.getElementById("demo-filter");
+      if (df.options.length === 1) data.body_parts.forEach(p => df.add(new Option(p, p)));
       loadPart();
       renderKnowledge();
     }
@@ -137,6 +144,10 @@
     // ---------- 問診題目 ----------
     function loadPart() {
       const part = document.getElementById("part").value;
+      const policy = data.clinical_rules?.[part];
+      const names = Object.fromEntries((data.questions[part] || []).map(q => [q.key, q.question]));
+      document.getElementById("q-flow").innerHTML = policy ? `<p>必要篩檢題固定；示範流程：${esc(policy.title)}</p>` + Object.entries(policy.branches || {}).map(([key,g]) => `<p>追問「${esc(names[key] || key)}」：前題「${esc(names[g.field] || g.field)}」明確回答「${g.negative.map(esc).join("／") }」時略過；其他或不確定則追問。</p>`).join("") : "";
+
       draft = (data.questions[part] || []).map((q) => ({ key: q.key, question: q.question, options: (q.options || []).join(",") }));
       const custom = data.custom_parts.includes(part);
       document.getElementById("part-badge").innerHTML = custom
@@ -198,6 +209,8 @@
       } catch (e) { setStatus("q-status", "失敗：" + e.message, false); }
     });
 
+    document.getElementById("demo-filter").addEventListener("change", renderKnowledge);
+
     // ---------- 診所知識 ----------
     function fillForm(k) {
       document.getElementById("k-id").value = k?.id || "";
@@ -211,6 +224,10 @@
     }
 
     function renderKnowledge() {
+      const allDemo = data.demo_knowledge || [];
+      const filter = document.getElementById("demo-filter").value;
+      const demo = allDemo.filter(k => !filter || k.body_part === filter);
+      document.getElementById("demo-k-list").innerHTML = `<h3>示範知識（${demo.length}／${allDemo.length} 筆，待醫師確認）</h3>` + demo.map(k => `<div class="kb-item"><b>${esc(k.title)}</b>　${k.active ? "啟用中" : "已停用"}<p>${esc(k.content)}</p><div class="meta">示範資料；確認與修改請參閱更新包說明。</div></div>`).join("");
       const list = data.knowledge || [];
       document.getElementById("k-list").innerHTML = `<h3>已建立的診所知識（${list.length} 筆）</h3>` + (list.length ? list.map((k) => `
         <div class="kb-item ${k.active === false ? "off" : ""}">

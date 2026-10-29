@@ -45,6 +45,7 @@
       body { background: #fff; }
       .card { box-shadow: none; }
     }
+      .kb-item { overflow-wrap:anywhere; }
   </style>
 </head>
 <body>
@@ -55,7 +56,7 @@
       <a href="/api/admin/clinic">⚙️ 診所設定（問診題目／知識庫）</a>
     </nav>
     <h1>🩺 今日看診清單</h1>
-    <div class="subtitle">看診前摘要：病人的主訴、AI 問診問答、過去看診紀錄，以及 AI 從診所知識庫找出的相關提醒。</div>
+    <div class="subtitle">看診前摘要：病人的主訴、AI 問診問答、過去預約與問診紀錄，以及 AI 從診所知識庫找出的相關提醒。</div>
     <div class="controls">
       <label>日期 <input type="date" id="date" /></label>
       <label>醫師 <select id="doctor"><option value="">全部醫師</option></select></label>
@@ -71,18 +72,25 @@
     document.getElementById("date").value = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
 
     function card(it) {
-      const visit = it.visit_type === "複診"
-        ? `<span class="tag repeat">複診（過去 ${it.past_visit_count} 次）</span>`
-        : `<span class="tag first">初診</span>`;
+      const visit = it.visit_type === "有過去預約"
+        ? `<span class="tag repeat">有過去預約（${it.past_visit_count} 筆）</span>`
+        : `<span class="tag first">無過去預約</span>`;
       const qa = it.qa.length
         ? `<ul class="qa">${it.qa.map((x) => `<li><span>${esc(x.question)}</span><br>→ ${esc(x.answer)}</li>`).join("")}</ul>`
         : `<div class="row meta">（略過問診直接掛號，沒有問答紀錄）</div>`;
       const last = it.last_visit
-        ? `<div class="row"><b>上次看診：</b>${esc(it.last_visit.date)}　${esc(it.last_visit.doctor)}　${esc(it.last_visit.category_label)}</div>` : "";
+        ? `<div class="row"><b>上次預約（未核實就診）：</b>${esc(it.last_visit.date)}　${esc(it.last_visit.doctor)}　${esc(it.last_visit.category_label)}</div>` : "";
       const kb = it.knowledge.length
         ? `<div class="kb"><div class="kb-title">📚 AI 知識庫提醒</div>${it.knowledge.map((k) => `
             <div class="kb-item"><span class="kb-source">【${esc(k.source)}】</span>${esc(k.advice)}
             ${k.warning ? `<br><span class="kb-warn">⚠ ${esc(k.warning)}</span>` : ""}</div>`).join("")}</div>` : "";
+      const cs = it.clinical_summary;
+      const clinical = cs ? `<div class="kb"><b>${esc(cs.notice)}</b>
+        <div class="row"><b>系統規則提示：</b>${esc(cs.risk.message)}</div>
+        <div class="row"><b>未確認／未回答：</b>${cs.missing.length ? cs.missing.map(esc).join("；") : "本示範問診適用題目均已回答；仍需醫師檢查"}</div>
+        <div class="row"><b>依回答不適用的追問：</b>${(cs.not_applicable || []).map(esc).join("；") || "無"}</div>
+        <div class="row meta">${esc(cs.history_note)}</div></div>` : "";
+      const previous = (it.previous_questionnaires || []).map(h => `<details class="kb"><summary>先前問診（病患自述）：${esc(h.date)}　${esc(h.body_part)}</summary><div>${esc(h.main_complaint)}</div>${h.answers.map(a => `<div>${esc(a.question || a.key)}：${esc(a.answer)}</div>`).join("")}</details>`).join("");
       return `
         <div class="card">
           <div class="card-head">
@@ -92,7 +100,9 @@
           </div>
           <div class="tags">${visit}<span class="tag">${esc(it.category_label)}</span>${it.body_part ? `<span class="tag">${esc(it.body_part)}</span>` : ""}</div>
           ${it.main_complaint ? `<div class="row"><b>主訴：</b>${esc(it.main_complaint)}</div>` : ""}
-          ${qa}
+          <div class="row"><b>本次問答（病患自述）：</b></div>${qa}
+          ${clinical}
+          ${previous}
           ${last}
           ${it.ai_suggestion ? `<div class="row"><b>AI 建議：</b>${esc(it.ai_suggestion)}</div>` : ""}
           ${kb}
@@ -113,8 +123,8 @@
         if (!data.items.length) { box.innerHTML = `<div class="empty">${esc(data.date)} 沒有掛號。</div>`; return; }
         const groups = {};
         data.items.forEach((it) => { (groups[it.time_slot] = groups[it.time_slot] || []).push(it); });
-        const first = data.items.filter((it) => it.visit_type === "初診").length;
-        box.innerHTML = `<div class="summary">${esc(data.date)}　共 ${data.items.length} 位病人（初診 ${first}、複診 ${data.items.length - first}）</div>` +
+        const first = data.items.filter((it) => it.visit_type === "無過去預約").length;
+        box.innerHTML = `<div class="summary">${esc(data.date)}　共 ${data.items.length} 位病人（無過去預約 ${first}、有過去預約 ${data.items.length - first}）</div>` +
           Object.entries(groups).map(([slot, list]) => `<h2 class="slot-title">${esc(slot)}（${list.length} 位）</h2>${list.map(card).join("")}`).join("");
       } catch (e) {
         box.innerHTML = `<div class="error">連線後端失敗，請確認伺服器已啟動。</div>`;

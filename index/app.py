@@ -1,3 +1,4 @@
+from clinical_demo import POLICIES, notice as clinical_notice, assess as assess_clinical, summarize as summarize_clinical, public_rules
 import sqlite3
 import json
 import pickle
@@ -25,7 +26,7 @@ from supabase import create_client, Client
 from postgrest.exceptions import APIError
 from fastapi import Header
 from set_admin_password import hash_password
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 app = FastAPI()
 
@@ -125,7 +126,7 @@ CATEGORY_LABELS = {
     "骨折創傷科": "骨折、外傷",
     "骨質疏鬆症門診": "骨質疏鬆",
     "兒童骨科": "兒童骨骼",
-    "骨骼腫瘤科": "疑似骨骼腫瘤",
+    "骨骼腫瘤科": "骨骼腫塊／需進一步評估",
     "高壓氧治療中心": "需高壓氧治療",
 }
 
@@ -361,7 +362,7 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 supabase: Optional[Client] = None
 if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    print("✅ 已連線至 Supabase")
+    print("✅ 已載入 Supabase 連線設定（資料存取待驗證）")
 else:
     print("⚠️ 尚未設定 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY，請參考 .env.example 設定，掛號功能暫時無法使用。")
 
@@ -480,7 +481,9 @@ def _extract_advice(content: str) -> str:
 def rag_answer(req: AnswerRequest):
     """檢索（TF-IDF）＋GPT 判斷（候選類型只來自檢索結果、理由經程式檢查）；GPT 不合格就只回原本的結果。"""
     result = _rag_retrieve(req)
-    if req.explain and result.get("retrieved_chunks"):
+    if (req.metadata or {}).get("body_part") in POLICIES:
+        result["answer"] = clinical_notice((req.metadata or {}).get("body_part")) + "\n" + result.get("answer", "")
+    if req.explain and (req.metadata or {}).get("body_part") not in POLICIES and result.get("retrieved_chunks"):
         rule_dept = (req.metadata or {}).get("recommended_department")
         rule_dept = rule_dept if rule_dept in ALLOWED_DEPARTMENTS else None
         verdict = rag_generate.judge(req.question, result["retrieved_chunks"], rule_dept, category_label)
@@ -505,6 +508,7 @@ def _rag_retrieve(req: AnswerRequest):
     # 不是小朋友的問題（部位不是「兒童」、描述也沒提到小孩），就不要拿兒童骨科的資料當依據，
     # 避免成人膝蓋痛被「青少年膝蓋痛」這類片段帶偏
     body_part = (req.metadata or {}).get("body_part")
+    ranked = [(i, score) for i, score in ranked if knowledge_matches_part(i, body_part)]
     if body_part and body_part != "兒童" and not re.search(r"小孩|兒童|小朋友|孩子|青少年|寶寶|嬰兒", req.question):
         ranked = [(i, s) for i, s in ranked if departments[i] != "兒童骨科"]
     if not ranked:
@@ -522,6 +526,8 @@ def _rag_retrieve(req: AnswerRequest):
             "content": contents[i],
             "source": sources[i] if i < len(sources) else CLINIC_BASE_SOURCE,
             "score": s,
+            "body_part": knowledge_meta[i].get("body_part") if i < len(knowledge_meta) else None,
+            "source_url": knowledge_meta[i].get("source_url") if i < len(knowledge_meta) else None,
             "supports_triage": recommended is not None and departments[i] == recommended,
         }
 
@@ -728,6 +734,10 @@ def get_next_available_slot(department: str, doctor: Optional[str] = None, days:
 
 @app.post("/api/booking/confirm")
 def confirm_booking(req: BookingRequest):
+    if req.body_part in POLICIES:
+        risk = assess_clinical(req.qa_answers or {}, req.body_part)
+        if risk['level'] in ('emergency', 'urgent'):
+            return {"status": "error", "message": risk['message']}
     if supabase is None:
         return {"status": "error", "message": "Supabase 尚未設定，請聯絡系統管理員。"}
 
@@ -1237,6 +1247,7 @@ with open(os.path.join(BASE_DIR, "clinic_default_questions.json"), encoding="utf
     DEFAULT_QUESTIONS: Dict[str, List[Dict[str, Any]]] = json.load(_f)
 BODY_PARTS = list(DEFAULT_QUESTIONS.keys())
 sources: List[str] = []
+knowledge_meta: List[dict] = []
 
 
 def _clinic_rows(table: str, active_only: bool = False) -> list:
@@ -1261,6 +1272,11 @@ def get_clinic_questions() -> Dict[str, List[Dict[str, Any]]]:
     for part, rows in custom.items():
         rows.sort(key=lambda r: r.get("sort_order") or 0)
         merged[part] = [{"key": r["q_key"], "question": r["question"], "options": r.get("options") or []} for r in rows]
+    # 每個部位保留其必要題目；新增題目仍可使用。篩檢題固定，避免改文字後規則失去意義。
+    for part, policy in POLICIES.items():
+        custom = {q['key']: q for q in merged.get(part, [])}
+        core = [dict(q if q['key'] in ('emergency_screen', 'urgent_screen') else custom.get(q['key'], q)) for q in policy['questions']]
+        merged[part] = core + [q for q in merged.get(part, []) if q['key'] not in {x['key'] for x in core}]
     return merged
 
 
@@ -1272,20 +1288,25 @@ def clinic_knowledge_content(row: dict) -> str:
 
 def rebuild_rag_index():
     """重建 RAG 索引：基礎知識庫（vector_store.db）＋診所知識（clinic_knowledge 表）。"""
-    global departments, contents, sources, vectorizer, doc_matrix
+    global departments, contents, sources, vectorizer, doc_matrix, knowledge_meta
     base_depts, base_contents, base_vec, base_matrix = load_sql_data()
+    knowledge_meta = [{"body_part": (re.search(r"部位：([^。]+)", c) or [None, ""])[1], "source_url": "", "review_status": "base"} for c in base_contents]
     clinic = _clinic_rows("clinic_knowledge", active_only=True)
+    custom_count = len(clinic)
+    with open(os.path.join(BASE_DIR, "clinic_demo_knowledge.json"), encoding="utf-8") as demo_file:
+        clinic += [r for r in json.load(demo_file) if r.get("active", True)]
     if not clinic:
         departments, contents, vectorizer, doc_matrix = base_depts, base_contents, base_vec, base_matrix
         sources = [CLINIC_BASE_SOURCE] * len(base_contents)
         return
+    knowledge_meta += [{"body_part": r.get("body_part") or "不限", "source_url": r.get("source_url") or "", "review_status": r.get("review_status") or "clinic"} for r in clinic]
     from sklearn.feature_extraction.text import TfidfVectorizer
     departments = list(base_depts) + [r.get("department") for r in clinic]
     contents = list(base_contents) + [clinic_knowledge_content(r) for r in clinic]
-    sources = [CLINIC_BASE_SOURCE] * len(base_contents) + [f"診所知識：{r.get('title') or '未命名'}" for r in clinic]
+    sources = [CLINIC_BASE_SOURCE] * len(base_contents) + [f"{'示範草稿（待醫師確認）' if r.get('review_status') == 'draft' else '診所知識'}：{r.get('title') or '未命名'}" for r in clinic]
     vectorizer = TfidfVectorizer(ngram_range=(1, 3), analyzer="char_wb")
     doc_matrix = vectorizer.fit_transform(contents).toarray().astype(np.float32)
-    print(f"✅ RAG 索引：基礎知識 {len(base_contents)} 筆＋診所知識 {len(clinic)} 筆")
+    print(f"✅ RAG 索引：基礎知識 {len(base_contents)} 筆＋診所自訂 {custom_count} 筆＋示範知識 {len(clinic)-custom_count} 筆")
 
 
 @app.on_event("startup")
@@ -1293,11 +1314,22 @@ def _build_index_on_startup():
     rebuild_rag_index()
 
 
-def rag_search(text: str, top_k: int = 3) -> list:
+def knowledge_matches_part(index, body_part):
+    if not body_part or index >= len(knowledge_meta):
+        return True
+    meta = knowledge_meta[index]
+    tag = meta.get("body_part") or "不限"
+    # 草稿嚴格依本次部位檢索；通用知識和基礎庫的非題庫部位仍可補充。
+    if meta.get("review_status") == "draft":
+        return tag == body_part
+    return tag not in POLICIES or tag == body_part
+
+
+def rag_search(text: str, top_k: int = 3, body_part: Optional[str] = None) -> list:
     if vectorizer is None or not text:
         return []
     sims = cosine_similarity(vectorizer.transform([text]).toarray().astype(np.float32), doc_matrix)[0]
-    ranked = sorted(((i, float(s)) for i, s in enumerate(sims) if s > 0), key=lambda x: x[1], reverse=True)[:top_k]
+    ranked = sorted(((i, float(s)) for i, s in enumerate(sims) if s > 0 and knowledge_matches_part(i, body_part)), key=lambda x: x[1], reverse=True)[:top_k]
     return [{"department": departments[i], "category_label": category_label(departments[i]), "content": contents[i],
              "source": sources[i] if i < len(sources) else CLINIC_BASE_SOURCE, "score": s} for i, s in ranked]
 
@@ -1325,15 +1357,19 @@ class KnowledgeRequest(BaseModel):
 
 @app.get("/api/clinic/questions")
 def public_clinic_questions():
-    return {"status": "success", "questions": get_clinic_questions()}
+    return {"status": "success", "questions": get_clinic_questions(), "clinical_rules": public_rules(), "protocol_version": "ortho-demo-2026-10-13-v2"}
 
 
 @app.get("/api/admin/clinic/data")
 def admin_clinic_data(admin_username: str = Depends(verify_admin)):
     custom_parts = sorted({r["body_part"] for r in _clinic_rows("clinic_questions")})
     knowledge = sorted(_clinic_rows("clinic_knowledge"), key=lambda r: r.get("created_at") or "")
+    with open(os.path.join(BASE_DIR, "clinic_demo_knowledge.json"), encoding="utf-8") as demo_file:
+        demo_knowledge = json.load(demo_file)
     return {
         "status": "success",
+        "demo_knowledge": demo_knowledge,
+        "clinical_rules": public_rules(),
         "body_parts": BODY_PARTS,
         "questions": get_clinic_questions(),
         "custom_parts": custom_parts,
@@ -1421,6 +1457,9 @@ def admin_today_data(date: Optional[str] = None, doctor: Optional[str] = None, a
     all_visits = (supabase.table("appointments").select("patient_id, appointment_date, doctor, department, status")
                   .in_("patient_id", patient_ids).execute().data or []) if patient_ids else []
     questions = get_clinic_questions()
+    past_triage = (supabase.table("triage_records")
+        .select("patient_id, appointment_id, body_part, main_complaint, qa_answers, created_at")
+        .in_("patient_id", patient_ids).execute().data or []) if patient_ids else []
 
     items = []
     for a in appts:
@@ -1434,9 +1473,16 @@ def admin_today_data(date: Optional[str] = None, doctor: Optional[str] = None, a
         q_text.update({q["key"]: q["question"] for q in questions.get(part, [])})
         qa = [{"question": q_text.get(k, k), "answer": v} for k, v in (t.get("qa_answers") or {}).items() if k != "mainComplaint"]
         search_text = " ".join(filter(None, [t.get("body_part"), t.get("main_complaint")] + [x["answer"] for x in qa]))
-        hits = rag_search(search_text, top_k=3) if search_text else []
+        hits = rag_search(search_text, top_k=3, body_part=part) if search_text else []
         session = SESSION_BY_TIME_SLOT.get(a["time_slot"])
         items.append({
+            "clinical_summary": summarize_clinical(part, t.get("qa_answers") or {}),
+            "previous_questionnaires": sorted([
+                {"date": h.get("created_at"), "body_part": h.get("body_part"), "main_complaint": h.get("main_complaint"),
+                 "answers": [{"key": k, "question": next((q["question"] for q in questions.get(h.get("body_part"), []) if q["key"] == k), k), "answer": str(v)} for k, v in (h.get("qa_answers") or {}).items() if k != "mainComplaint"]}
+                for h in past_triage if h.get("patient_id") == a["patient_id"] and h.get("appointment_id") != a["id"]
+                and str(h.get("created_at") or "")[:10] < date
+            ], key=lambda h: str(h["date"] or ""), reverse=True)[:5],
             "appointment_no": a.get("appointment_no"),
             "doctor": a["doctor"],
             "time_slot": a["time_slot"],
@@ -1444,7 +1490,7 @@ def admin_today_data(date: Optional[str] = None, doctor: Optional[str] = None, a
             "patient_name": p.get("name"),
             "patient_no": p.get("patient_no"),
             "age": _age(p.get("birth_date"), date),
-            "visit_type": "複診" if past else "初診",
+            "visit_type": "有過去預約" if past else "無過去預約",
             "past_visit_count": len(past),
             "last_visit": ({"date": past[-1]["appointment_date"], "doctor": past[-1]["doctor"],
                             "category_label": category_label(past[-1]["department"])} if past else None),
@@ -1520,6 +1566,11 @@ def agent_chat(req: AgentChatRequest, authorization: Optional[str] = Header(defa
     if authorization and supabase is not None:
         patient = patient_from_token(authorization)
         profile = account_profile(patient) if patient else None
+    if (req.state or {}).get("clinical_demo") or chat_agent.has_symptom(req.message):
+        state = req.state if (req.state or {}).get("clinical_demo") else None
+        response = chat_agent.handle_turn(state, req.message, AGENT_TOOLS, profile=profile)
+        response["state"]["clinical_demo"] = True
+        return response
     # 有設定 OPENAI_API_KEY 就用 LLM 版；沒設定或呼叫失敗時退回規則版（兩種版本的對話狀態不通用，切換時重新開始）
     if agent_llm.llm_enabled():
         state = req.state if (req.state or {}).get("mode") == "llm" else None
