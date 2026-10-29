@@ -2,6 +2,7 @@ import sqlite3
 import json
 import pickle
 import numpy as np
+import logging
 import os
 import re
 import secrets
@@ -1413,6 +1414,7 @@ def admin_clinic_page(admin_username: str = Depends(verify_admin)):
 # ===== 聊天式掛號助理（規則版代理人，邏輯在 agent.py）=====
 # 代理人的「工具」直接沿用既有的後端功能，身分驗證、防超賣、班表檢查都照常把關。
 import agent as chat_agent
+import llm_agent
 from pydantic import ValidationError
 
 
@@ -1452,7 +1454,16 @@ def agent_chat(req: AgentChatRequest, authorization: Optional[str] = Header(defa
     if authorization and supabase is not None:
         patient = patient_from_token(authorization)
         profile = account_profile(patient) if patient else None
-    return chat_agent.handle_turn(req.state, req.message, AGENT_TOOLS, profile=profile)
+    # 設了 OPENAI_API_KEY 就用 OpenAI 版決策層（AGENT_MODE=rule 可強制用規則版）；出錯時退回規則版。
+    state = req.state or {}
+    use_llm = llm_agent.is_available() and os.environ.get("AGENT_MODE", "auto") != "rule" and state.get("mode", "llm") == "llm"
+    if use_llm:
+        try:
+            return llm_agent.handle_turn_llm(state, req.message, AGENT_TOOLS, profile=profile)
+        except Exception as e:
+            logging.getLogger(__name__).warning("OpenAI 助理失敗，改用規則版：%s", e)
+            state = {}
+    return chat_agent.handle_turn(state if state.get("step") else None, req.message, AGENT_TOOLS, profile=profile)
 
 
 # 管理者專用，帶有網頁介面的掛號總覽 API（需登入）
