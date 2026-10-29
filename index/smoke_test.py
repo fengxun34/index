@@ -235,7 +235,7 @@ def main():
         res = client.post("/api/agent/chat", json={"message": "我膝蓋痛", "state": res["state"]}).json()
         check("聊天助理：說出症狀後開始問診", res["state"].get("step") == "qa" and res["state"].get("part") == "膝關節")
         st = res["state"]
-        for _ in range(5):
+        for _ in range(15):
             if st.get("step") != "qa":
                 break
             res = client.post("/api/agent/chat", json={"message": "跳過這題", "state": st}).json()

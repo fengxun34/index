@@ -8,6 +8,7 @@
 對話狀態（state）每一輪由前端原封不動帶回來，後端不需要另外存 session。
 """
 
+from clinical_demo import POLICIES, next_choice as clinical_next, assess as assess_clinical, notice as clinical_notice
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -45,20 +46,20 @@ NON_ORTHO = [
 
 PART_RULES = [
     ("兒童", ["小孩", "兒童", "小朋友", "O型腿", "X型腿", "扁平足", "斜頸", "生長痛"]),
-    ("腫瘤", ["腫塊", "腫瘤", "骨癌", "骨髓炎"]),
+    ("腫瘤", ["腫塊", "腫瘤", "骨癌"]),
     ("高壓氧", ["高壓氧", "一氧化碳中毒", "放射性骨壞死"]),
     ("頸椎", ["脖子", "頸", "落枕"]),
     ("腰椎", ["腰", "下背", "坐骨神經"]),
     ("肩關節", ["肩", "五十肩"]),
-    ("肘腕", ["手肘", "手腕", "手指", "媽媽手", "腕隧道", "手"]),
     ("髖關節", ["髖", "鼠蹊", "大腿根"]),
     ("膝關節", ["膝", "退化性關節炎"]),
+    ("肘腕", ["手肘", "手腕", "手指", "媽媽手", "腕隧道", "手"]),
     ("足踝", ["腳踝", "足底", "腳跟", "扭傷", "腳"]),
     ("外傷", ["骨折", "車禍", "跌倒", "外傷", "撞擊"]),
 ]
 
 # 部位代碼 → 對話裡的說法
-PART_DISPLAY = {"兒童": "兒童骨骼", "腫瘤": "骨骼腫塊", "高壓氧": "需要高壓氧治療", "外傷": "外傷", "未明": "骨骼關節"}
+PART_DISPLAY = {"兒童": "兒童骨骼", "腫瘤": "骨骼腫塊", "高壓氧": "高壓氧評估／轉診需求", "外傷": "外傷", "未明": "骨骼關節"}
 
 SYMPTOM_WORDS = re.compile(r"不舒服|難受|好痛|很痛|痛|刺痛|悶痛|脹痛|酸|痠|麻|無力|腫|卡住|變形|瘀青|扭到|拐到|閃到")
 
@@ -84,6 +85,9 @@ def detect_non_ortho(text: str) -> Optional[str]:
 
 
 def check_emergency(part: str, answers: Dict[str, str]) -> str:
+    if part in POLICIES:
+        risk = assess_clinical(answers, part)
+        return risk["message"] if risk["level"] in ("emergency", "urgent") else ""
     joined = " ".join(str(v) for v in answers.values())
     if part in ("頸椎", "腰椎") and re.search(r"大小便失禁|下肢無力癱瘓|馬鞍區麻木|意識不清", joined):
         return "您描述的症狀可能是脊髓或神經壓迫（例如大小便失禁、下肢無力），請立即前往急診評估。"
@@ -340,6 +344,10 @@ def _doctor_names(tools):
 
 def _start(state, msg, tools, today):
     state.update({k: v for k, v in new_state().items() if k != "person"})
+    alert = check_emergency(detect_part(msg) or "未明", {"mainComplaint":msg})
+    if alert:
+        state["step"] = "done"
+        return reply(state, alert, ["重新開始"], done=True)
     if re.search(r"取消", msg) and re.search(r"掛號|預約|門診", msg):
         return _begin_identify(state, "cancel", tools)
     if re.search(r"改|換", msg) and re.search(r"時間|日期|掛號|預約|改期", msg):
@@ -371,10 +379,17 @@ def _start(state, msg, tools, today):
                  ["我肩膀痛", "查詢我的掛號", "重新開始"])
 
 
+MAX_QA = 4  # 問診最多問幾題（診所希望 2～4 題就判斷掛號醫師）
+
+
 def _begin_qa(state, msg, tools):
     part = detect_part(msg) or "未明"
     state.update({"step": "qa", "part": part, "answers": {"mainComplaint": msg}, "q_index": 0})
-    questions = tools.questions(part)
+    alert = check_emergency(part, state["answers"])
+    if alert:
+        state["step"] = "done"
+        return reply(state, alert, ["重新開始"], done=True)
+    questions = tools.questions(part) if part in POLICIES else tools.questions(part)[:MAX_QA]
     if not questions:
         return _finish_qa(state, tools)
     q = questions[0]
@@ -389,14 +404,24 @@ def _non_ortho(state, msg, tools, today):
 
 
 def _qa(state, msg, tools, today):
-    questions = tools.questions(state["part"])
+    questions = tools.questions(state["part"]) if state["part"] in POLICIES else tools.questions(state["part"])[:MAX_QA]
     idx = state["q_index"]
+    if state["part"] in POLICIES and state.get("clinical_question_key"):
+        idx = next((i for i, q in enumerate(questions) if q["key"] == state["clinical_question_key"]), idx)
     if idx < len(questions):
         state["answers"][questions[idx]["key"]] = "（略過）" if "跳過" in msg else msg
     emergency = check_emergency(state["part"], state["answers"])
     if emergency:
         state["step"] = "done"
         return reply(state, f"⚠ {emergency}\n系統不建議用一般門診掛號處理，請以就醫為優先。", ["重新開始"], done=True)
+    if state["part"] in POLICIES:
+        remaining = [q for q in questions if q['key'] not in state['answers']]
+        choice = clinical_next(state['answers'], remaining, state['part'])
+        if choice['action'] == 'ask':
+            q = next(q for q in remaining if q['key'] == choice['key'])
+            state['clinical_question_key'] = q['key']
+            return reply(state, q['question'], (q.get('options') or [])[:6] + ['跳過這題'])
+        return _finish_qa(state, tools)
     idx += 1
     state["q_index"] = idx
     if idx < len(questions):
@@ -419,9 +444,14 @@ def _finish_qa(state, tools):
                             "您也可以先讓診所醫師初步評估，要幫您安排嗎？",
                      ["好，先讓診所醫師評估", "不用，我會去大醫院"])
     intro = f"判斷結果：較可能是「{label}」的問題。"
+    if state["part"] in POLICIES:
+        intro = clinical_notice(state["part"]) + "\n" + assess_clinical(state["answers"], state["part"])["message"] + "\n建議由醫師進一步評估。"
     if state["rag"]:
         intro += f"\n📚 {state['rag']}"
-    return _offer_slot(state, tools, intro=intro)
+    response = _offer_slot(state, tools, intro=intro)
+    if state["part"] in POLICIES and state["step"] == "qa":
+        state["step"] = "done"
+    return response
 
 
 def _referral(state, msg, tools, today):

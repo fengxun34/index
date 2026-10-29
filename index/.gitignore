@@ -1,13 +1,9 @@
+# 金鑰與密碼：絕對不要放上 GitHub
+.env
+*.env
+!.env.example
+
 __pycache__/
 *.pyc
-
-# Generated RAG knowledge base artifacts (rebuild with `python update.py`)
-vector_store.db
-vectorizer.pkl
-
-# Secrets
-.env
-
-# Virtual envs
-.venv/
 venv/
+.venv/

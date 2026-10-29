@@ -210,6 +210,25 @@ def main():
     except Exception as e:
         bad(f"後端回應異常：{type(e).__name__}", "重新啟動後端，並把後端視窗的錯誤訊息提供給開發人員")
 
+    section("9. OpenAI 聊天助理（選填）")
+    key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if not key:
+        warn("沒有設定 OPENAI_API_KEY：聊天式掛號助理會使用規則版（可正常使用）。要用 GPT 請在 .env 加 OPENAI_API_KEY=...")
+    else:
+        try:
+            import openai  # noqa: F401
+            r = httpx.get("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"}, timeout=10)
+            if r.status_code == 200:
+                ok(f"OpenAI 金鑰可用（模型：{os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')}）")
+            elif r.status_code == 401:
+                bad("OpenAI 金鑰無效或已被撤銷", "到 OpenAI 後台建立新的金鑰，更新 .env 的 OPENAI_API_KEY")
+            else:
+                warn(f"OpenAI 回應 {r.status_code}，請確認帳號額度與網路")
+        except ImportError:
+            bad("沒有安裝 openai 套件", "執行 pip install -r requirements_true_rag.txt")
+        except Exception as e:
+            warn(f"連不到 OpenAI（{type(e).__name__}），請確認網路；連不到時會自動退回規則版")
+
     print("\n" + "=" * 56)
     if problems:
         print(f" 發現 {len(problems)} 個問題，請依照 👉 的建議處理後再執行一次這支程式。")
