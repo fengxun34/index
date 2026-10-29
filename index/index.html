@@ -583,19 +583,11 @@
 
       // 開啟網頁時，若這台裝置之前登入過，就自動恢復登入並帶入資料
       const [accountRestored, setAccountRestored] = useState(false);
-      const autoChatStartedRef = useRef(false);
       useEffect(() => {
         const token = loadJson(SESSION_STORAGE_KEY, null);
         if (token) refreshAccount(token).finally(() => setAccountRestored(true));
         else setAccountRestored(true);
       }, []);
-
-      // AI 掛號助理是預設入口：帳號恢復完成後自動開啟聊天（聊天畫面底下「回主畫面」仍可使用按鈕式流程）
-      useEffect(() => {
-        if (!accountRestored || autoChatStartedRef.current) return;
-        autoChatStartedRef.current = true;
-        openChat();
-      }, [accountRestored]);
 
       // 登入後帶入個人資料（只補空白欄位，不蓋掉使用者正在修改的內容）
       useEffect(() => {
