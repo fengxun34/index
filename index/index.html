@@ -1563,7 +1563,40 @@
           if (qaBusyRef.current) return; // AI 正在挑下一題，先忽略重複輸入
           const currentQuestion = getQuestions(bp)[step];
           if (!currentQuestion) return;
-          const newAnswers = { ...ans, [currentQuestion.key]: incoming };
+          const options = currentQuestion.options || [];
+          // 有選項的題目，病患用自己的話回答時，請 AI 對應到選項（失敗或不確定就維持原話，規則一樣掃描原話）
+          if (clinicalRules[bp] && options.length && !options.includes(incoming)) {
+            qaBusyRef.current = true;
+            setPrompt("AI 正在理解您的回答…");
+            mapFreeAnswer(bp, currentQuestion.key, incoming).then((mapped) => {
+              qaBusyRef.current = false;
+              continueQa(mapped ? { [currentQuestion.key]: mapped, [currentQuestion.key + "__text"]: incoming } : { [currentQuestion.key]: incoming });
+            });
+            return;
+          }
+          continueQa({ [currentQuestion.key]: incoming });
+          return;
+        }
+      }
+
+      async function mapFreeAnswer(bp, key, text) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 6000);
+          const res = await fetch(`${API_BASE}/api/triage/map-answer`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+            body: JSON.stringify({ body_part: bp, key, text })
+          });
+          clearTimeout(timer);
+          const data = await res.json();
+          return data.status === "success" && data.mapped ? data.value : null;
+        } catch (e) { return null; }
+      }
+
+      function continueQa(patch) {
+        {
+          const { bodyPart: bp, qaStep: step, answers: ans } = latestRef.current;
+          const newAnswers = { ...ans, ...patch };
           setAnswers(newAnswers);
           const emergency = checkEmergency(bp, newAnswers);
           if (emergency) {

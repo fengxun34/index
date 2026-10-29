@@ -105,7 +105,7 @@ def summarize(part, answers):
         if screen(answers.get(key), part, level) == 'unknown' and q['question'] not in missing:
             missing.append(q['question'])
     return {'notice':notice(part), 'version':VERSION, 'risk':assess(answers, part),
-            'patient_report':[{'key':q['key'], 'label':q['question'], 'value':str(answers[q['key']])} for q in questions if answered(answers.get(q['key']))],
+            'patient_report':[{'key':q['key'], 'label':q['question'], 'value':str(answers[q['key']]) + (f"（病患原話：{answers[q['key'] + '__text']}）" if answers.get(q['key'] + '__text') else '')} for q in questions if answered(answers.get(q['key']))],
             'not_applicable':[q['question'] for q in POLICIES[part]['questions'] if not applicable(part,q['key'],answers)],
             'missing':missing, 'history_note':'過去預約不代表已完成就診；未包含醫師診斷、處方或正式病歷。'}
 

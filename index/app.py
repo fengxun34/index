@@ -577,6 +577,22 @@ class NextQuestionRequest(BaseModel):
     remaining_keys: List[str] = []
 
 
+class MapAnswerRequest(BaseModel):
+    body_part: str
+    key: str
+    text: str
+
+
+@app.post("/api/triage/map-answer")
+def triage_map_answer(req: MapAnswerRequest):
+    """問診自由回答：把病患的話對應到題庫選項（OpenAI 輔助、規則把關）；不對應就回 mapped=false，前端維持原文。"""
+    question = next((q for q in get_clinic_questions().get(req.body_part) or [] if q["key"] == req.key), None)
+    if not question or req.body_part not in POLICIES:
+        return {"status": "success", "mapped": False}
+    option = answer_mapper.map_answer(req.body_part, req.key, question["question"], question.get("options") or [], req.text)
+    return {"status": "success", "mapped": bool(option), "value": option}
+
+
 @app.post("/api/triage/next-question")
 def triage_next_question(req: NextQuestionRequest):
     """問診追問：從診所題庫的「尚未問過」題目中，由 GPT 挑下一題或判斷可結束；沒有金鑰或失敗就照原順序。"""
@@ -1527,6 +1543,7 @@ import agent as chat_agent
 import agent_llm
 import rag_generate
 import triage_questions
+import answer_mapper
 from pydantic import ValidationError
 
 

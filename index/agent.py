@@ -9,6 +9,7 @@
 """
 
 from clinical_demo import POLICIES, next_choice as clinical_next, assess as assess_clinical, notice as clinical_notice
+from answer_mapper import map_answer, store as store_answer
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -409,7 +410,12 @@ def _qa(state, msg, tools, today):
     if state["part"] in POLICIES and state.get("clinical_question_key"):
         idx = next((i for i, q in enumerate(questions) if q["key"] == state["clinical_question_key"]), idx)
     if idx < len(questions):
-        state["answers"][questions[idx]["key"]] = "（略過）" if "跳過" in msg else msg
+        q = questions[idx]
+        if "跳過" in msg:
+            state["answers"][q["key"]] = "（略過）"
+        else:  # 病患用自己的話回答有選項的題目時，請 OpenAI 對應到選項（有保護規則，失敗就保留原文）
+            mapped = map_answer(state["part"], q["key"], q["question"], q.get("options") or [], msg) if state["part"] in POLICIES else None
+            store_answer(state["answers"], q["key"], msg, mapped)
     emergency = check_emergency(state["part"], state["answers"])
     if emergency:
         state["step"] = "done"
